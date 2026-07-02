@@ -1,9 +1,9 @@
-import { Hash, Link2 } from "lucide-react";
+import { Folder, Link2 } from "lucide-react";
 import {
   type Note,
-  getBacklinksGroupedByMainTag,
-  getNoteSnippet,
-  getNoteTitle,
+  getBacklinksGroupedByType,
+  noteSnippet,
+  noteTitle,
 } from "@/lib/note-utils";
 
 interface BacklinksPanelProps {
@@ -17,7 +17,7 @@ export function BacklinksPanel({
   allNotes,
   onOpenNote,
 }: BacklinksPanelProps) {
-  const groups = getBacklinksGroupedByMainTag(note, allNotes);
+  const groups = getBacklinksGroupedByType(note, allNotes);
   const total = [...groups.values()].reduce(
     (sum, group) => sum + group.length,
     0,
@@ -39,17 +39,17 @@ export function BacklinksPanel({
           <p className="mt-2 text-xs text-muted-foreground">
             No notes link here yet. Reference this note elsewhere with{" "}
             <code className="rounded bg-muted px-1">
-              [[{getNoteTitle(note.content)}]]
+              [[{noteTitle(note)}]]
             </code>
             .
           </p>
         ) : (
           <div className="mt-3 space-y-4">
-            {[...groups.entries()].map(([tag, linkingNotes]) => (
-              <div key={tag}>
+            {[...groups.entries()].map(([type, linkingNotes]) => (
+              <div key={type}>
                 <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-[hsl(4_50%_45%)]">
-                  <Hash size={12} />
-                  {tag}
+                  <Folder size={12} />
+                  {type ? type.split("/").join(" / ") : "unfiled"}
                   <span className="text-muted-foreground">
                     · {linkingNotes.length}
                   </span>
@@ -62,11 +62,11 @@ export function BacklinksPanel({
                         className="block w-full rounded-md border border-border/50 bg-white px-3 py-2 text-left transition-colors hover:border-[hsl(4_66%_55%/0.4)] hover:bg-[hsl(4_66%_55%/0.04)]"
                       >
                         <span className="block truncate text-sm font-medium text-[hsl(211_90%_40%)]">
-                          {getNoteTitle(linkingNote.content)}
+                          {noteTitle(linkingNote)}
                         </span>
-                        {getNoteSnippet(linkingNote.content) && (
+                        {noteSnippet(linkingNote) && (
                           <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                            {getNoteSnippet(linkingNote.content)}
+                            {noteSnippet(linkingNote)}
                           </span>
                         )}
                       </button>

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { FolderOpen, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -7,36 +9,47 @@ import {
 import { Sidebar } from "@/components/notes/Sidebar";
 import { NoteList } from "@/components/notes/NoteList";
 import { EditorPane } from "@/components/notes/EditorPane";
-import { createNote, useNotes } from "@/store/notes-store";
+import {
+  chooseVaultFolder,
+  createNote,
+  initStore,
+  useVault,
+} from "@/store/notes-store";
 import { filterNotes, type NoteFilter } from "@/lib/filters";
-import { DEFAULT_MAIN_TAG } from "@/lib/note-utils";
+import { DEFAULT_TYPE } from "@/lib/note-utils";
 
 const Index = () => {
-  const notes = useNotes();
+  const vault = useVault();
   const [filter, setFilter] = useState<NoteFilter>({ kind: "all" });
   const [search, setSearch] = useState("");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
+  useEffect(() => {
+    initStore();
+  }, []);
+
+  const { notes } = vault;
   const visibleNotes = useMemo(
     () => filterNotes(notes, filter, search),
     [notes, filter, search],
   );
 
-  const selectedNote =
-    notes.find((note) => note.id === selectedNoteId) ?? null;
+  const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
 
   // Keep a sensible selection as filters change or notes are trashed
   useEffect(() => {
+    if (vault.status !== "ready") return;
     const selectionVisible =
       selectedNote && visibleNotes.some((note) => note.id === selectedNote.id);
     if (!selectionVisible) {
       setSelectedNoteId(visibleNotes[0]?.id ?? null);
     }
-  }, [visibleNotes, selectedNote]);
+  }, [vault.status, visibleNotes, selectedNote]);
 
-  const handleCreateNote = () => {
-    const mainTag = filter.kind === "tag" ? filter.tag : DEFAULT_MAIN_TAG;
-    const note = createNote(mainTag);
+  const handleCreateNote = async () => {
+    const typePath = filter.kind === "type" ? filter.path : DEFAULT_TYPE;
+    const note = await createNote(typePath);
+    if (!note) return;
     if (filter.kind === "trash") setFilter({ kind: "all" });
     setSearch("");
     setSelectedNoteId(note.id);
@@ -46,7 +59,7 @@ const Index = () => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        handleCreateNote();
+        void handleCreateNote();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -55,24 +68,56 @@ const Index = () => {
   }, [filter]);
 
   const handleOpenNote = (id: string) => {
-    // Jumping to a note that the current filter hides: widen to All Notes
-    const target = notes.find((note) => note.id === id);
-    if (
-      target &&
-      filter.kind === "tag" &&
-      target.mainTag !== filter.tag
-    ) {
-      setFilter({ kind: "all" });
-    }
+    setFilter({ kind: "all" });
     setSearch("");
     setSelectedNoteId(id);
   };
+
+  if (vault.status === "pick-vault" || vault.status === "error") {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[hsl(40_20%_97%)]">
+        <div className="max-w-sm text-center">
+          <p className="text-5xl">📖</p>
+          <h1 className="mt-4 text-xl font-semibold">Grimoire</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Your notes are plain markdown files in a folder — folders are
+            types. Point Grimoire at a folder to open your vault.
+          </p>
+          {vault.status === "error" && (
+            <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              Couldn't open the vault: {vault.error}
+            </p>
+          )}
+          <Button
+            className="mt-5 gap-2"
+            onClick={() => void chooseVaultFolder()}
+          >
+            <FolderOpen size={16} /> Choose vault folder
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (vault.status !== "ready") {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[hsl(40_20%_97%)]">
+        <Loader2 className="animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen w-screen overflow-hidden">
       <ResizablePanelGroup direction="horizontal">
         <ResizablePanel defaultSize={17} minSize={12} maxSize={28}>
-          <Sidebar notes={notes} filter={filter} onFilterChange={setFilter} />
+          <Sidebar
+            notes={notes}
+            filter={filter}
+            isDesktop={vault.isDesktop}
+            vaultLocation={vault.location}
+            onFilterChange={setFilter}
+          />
         </ResizablePanel>
         <ResizableHandle className="w-px bg-transparent" />
         <ResizablePanel defaultSize={26} minSize={18} maxSize={40}>
@@ -83,7 +128,7 @@ const Index = () => {
             search={search}
             onSearchChange={setSearch}
             onSelectNote={setSelectedNoteId}
-            onCreateNote={handleCreateNote}
+            onCreateNote={() => void handleCreateNote()}
           />
         </ResizablePanel>
         <ResizableHandle className="w-px bg-border/60" />

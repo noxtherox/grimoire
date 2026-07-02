@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Ursa",
+  "productName": "Grimoire",
   "version": "0.1.0",
-  "identifier": "com.ursa.notes",
+  "identifier": "com.grimoire.notes",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:8080",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Ursa",
+        "title": "Grimoire",
         "width": 1280,
         "height": 820,
         "minWidth": 900,

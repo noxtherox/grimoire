@@ -10,7 +10,13 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { type Note, getNoteSnippet, getNoteTitle } from "@/lib/note-utils";
+import {
+  type Note,
+  noteSnippet,
+  noteTitle,
+  noteTypePath,
+  typeKey,
+} from "@/lib/note-utils";
 import type { NoteFilter } from "@/lib/filters";
 import {
   deleteNoteForever,
@@ -52,7 +58,7 @@ export function NoteList({
       ? "All Notes"
       : filter.kind === "trash"
         ? "Trash"
-        : `#${filter.tag}`;
+        : filter.path.join(" / ");
 
   return (
     <div className="flex h-full flex-col bg-[hsl(40_20%_97%)]">
@@ -64,7 +70,7 @@ export function NoteList({
               variant="ghost"
               size="sm"
               className="h-7 text-xs text-destructive hover:text-destructive"
-              onClick={() => emptyTrash()}
+              onClick={() => void emptyTrash()}
             >
               Empty trash
             </Button>
@@ -102,8 +108,9 @@ export function NoteList({
           </p>
         )}
         {notes.map((note) => {
-          const title = getNoteTitle(note.content);
-          const snippet = getNoteSnippet(note.content);
+          const title = noteTitle(note);
+          const snippet = noteSnippet(note);
+          const type = typeKey(noteTypePath(note));
           return (
             <ContextMenu key={note.id}>
               <ContextMenuTrigger asChild>
@@ -130,9 +137,9 @@ export function NoteList({
                   <div className="mt-1.5 flex items-center gap-2">
                     <Badge
                       variant="secondary"
-                      className="h-4 rounded px-1.5 text-[10px] font-normal"
+                      className="h-4 max-w-[60%] rounded px-1.5 text-[10px] font-normal"
                     >
-                      #{note.mainTag}
+                      <span className="truncate">{type || "unfiled"}</span>
                     </Badge>
                     <span className="text-[11px] text-muted-foreground">
                       {formatNoteDate(note.updatedAt)}
@@ -143,12 +150,12 @@ export function NoteList({
               <ContextMenuContent>
                 {inTrash ? (
                   <>
-                    <ContextMenuItem onClick={() => restoreNote(note.id)}>
+                    <ContextMenuItem onClick={() => void restoreNote(note.id)}>
                       <Undo2 size={14} className="mr-2" /> Restore
                     </ContextMenuItem>
                     <ContextMenuItem
                       className="text-destructive"
-                      onClick={() => deleteNoteForever(note.id)}
+                      onClick={() => void deleteNoteForever(note.id)}
                     >
                       <Trash2 size={14} className="mr-2" /> Delete forever
                     </ContextMenuItem>
@@ -161,7 +168,7 @@ export function NoteList({
                     </ContextMenuItem>
                     <ContextMenuItem
                       className="text-destructive"
-                      onClick={() => trashNote(note.id)}
+                      onClick={() => void trashNote(note.id)}
                     >
                       <Trash2 size={14} className="mr-2" /> Move to trash
                     </ContextMenuItem>
