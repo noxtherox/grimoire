@@ -53,11 +53,71 @@ interface ValueEditorProps {
 const inputClass =
   "h-6 rounded border-transparent bg-transparent px-1.5 text-xs shadow-none hover:bg-muted/60 focus-visible:bg-white focus-visible:ring-1";
 
+const wrapEditorClass =
+  "w-full resize-none overflow-hidden whitespace-pre-wrap break-words rounded px-1.5 py-1 text-xs leading-4";
+
+interface WrapTextareaProps {
+  value: string;
+  placeholder?: string;
+  onChange: (text: string) => void;
+  onBlur?: () => void;
+}
+
+// Single-line look, but grows and wraps when the value is long. The invisible
+// replica sizes the grid cell; the textarea stretches to match it.
+function WrapTextarea({ value, placeholder, onChange, onBlur }: WrapTextareaProps) {
+  return (
+    <div className="grid">
+      <span aria-hidden className={`${wrapEditorClass} invisible [grid-area:1/1]`}>
+        {value || placeholder}{" "}
+      </span>
+      <textarea
+        rows={1}
+        value={value}
+        placeholder={placeholder}
+        className={`${wrapEditorClass} [grid-area:1/1] bg-transparent outline-none placeholder:text-muted-foreground hover:bg-muted/60 focus-visible:bg-white focus-visible:ring-1 focus-visible:ring-ring`}
+        onChange={(e) => onChange(e.target.value.replace(/\n/g, " "))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+        }}
+        onBlur={onBlur}
+      />
+    </div>
+  );
+}
+
+function ListValueEditor({
+  initial,
+  onCommit,
+}: {
+  initial: string;
+  onCommit: (value: PropertyValue | null) => void;
+}) {
+  const [text, setText] = useState(initial);
+  return (
+    <WrapTextarea
+      value={text}
+      placeholder="a, b, c"
+      onChange={setText}
+      onBlur={() => {
+        const items = text
+          .split(",")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+        onCommit(items.length ? items : null);
+      }}
+    />
+  );
+}
+
 function ValueEditor({ type, value, onCommit }: ValueEditorProps) {
   if (type === "checkbox") {
     return (
       <Checkbox
-        className="ml-1.5"
+        className="ml-1.5 mt-1"
         checked={value === true}
         onCheckedChange={(checked) => onCommit(checked === true)}
       />
@@ -92,29 +152,13 @@ function ValueEditor({ type, value, onCommit }: ValueEditorProps) {
   }
   if (type === "list") {
     const text = Array.isArray(value) ? value.join(", ") : String(value ?? "");
-    return (
-      <Input
-        key={text}
-        defaultValue={text}
-        placeholder="a, b, c"
-        className={inputClass}
-        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-        onBlur={(e) => {
-          const items = e.target.value
-            .split(",")
-            .map((item) => item.trim())
-            .filter((item) => item.length > 0);
-          onCommit(items.length ? items : null);
-        }}
-      />
-    );
+    return <ListValueEditor key={text} initial={text} onCommit={onCommit} />;
   }
   return (
-    <Input
-      className={inputClass}
+    <WrapTextarea
       placeholder="Empty"
       value={value === undefined ? "" : String(value)}
-      onChange={(e) => onCommit(e.target.value || null)}
+      onChange={(text) => onCommit(text || null)}
     />
   );
 }
@@ -228,7 +272,7 @@ export function PropertiesSection({ note }: PropertiesSectionProps) {
           const Icon = TYPE_ICONS[def.type];
           const inherited = ownerKey !== ownKey;
           return (
-            <div key={`${ownerKey}:${def.name}`} className="flex items-center gap-1">
+            <div key={`${ownerKey}:${def.name}`} className="flex items-start gap-1">
               <Popover
                 open={editing === `${ownerKey}:${def.name}`}
                 onOpenChange={(open) =>
@@ -281,7 +325,7 @@ export function PropertiesSection({ note }: PropertiesSectionProps) {
           const inferredType = inferPropertyType(value);
           const Icon = TYPE_ICONS[inferredType];
           return (
-            <div key={key} className="flex items-center gap-1">
+            <div key={key} className="flex items-start gap-1">
               <Popover
                 open={editing === `extra:${key}`}
                 onOpenChange={(open) => setEditing(open ? `extra:${key}` : null)}
