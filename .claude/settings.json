@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc --noEmit *)",
+      "Bash(pnpm exec tsc -p tsconfig.app.json --noEmit *)",
+      "Bash(pnpm exec eslint *)",
+      "Bash(pnpm lint *)",
+      "Bash(npm ls *)",
+      "Bash(cargo check *)",
+      "mcp__Claude_Preview__preview_screenshot"
+    ]
+  }
+}
