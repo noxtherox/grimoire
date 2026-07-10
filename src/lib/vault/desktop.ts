@@ -2,10 +2,12 @@ import {
   exists,
   mkdir,
   readDir,
+  readFile,
   readTextFile,
   remove,
   rename,
   stat,
+  writeFile,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { TRASH_DIR, MAX_TYPE_DEPTH } from "@/lib/note-utils";
@@ -68,6 +70,10 @@ export class DesktopVault implements VaultBackend {
     }
   }
 
+  async readText(path: string): Promise<string> {
+    return readTextFile(this.abs(path));
+  }
+
   async write(path: string, content: string): Promise<void> {
     await this.ensureParentDir(path);
     await writeTextFile(this.abs(path), content);
@@ -84,5 +90,14 @@ export class DesktopVault implements VaultBackend {
 
   async exists(path: string): Promise<boolean> {
     return exists(this.abs(path));
+  }
+
+  async writeBinary(path: string, bytes: Uint8Array): Promise<void> {
+    await this.ensureParentDir(path);
+    await writeFile(this.abs(path), bytes);
+  }
+
+  async readBinary(path: string): Promise<Uint8Array> {
+    return readFile(this.abs(path));
   }
 }
