@@ -1,10 +1,27 @@
 import type { VaultBackend, VaultFile } from "./backend";
 
 const STORAGE_KEY = "grimoire.browserVault.v1";
+const ASSETS_KEY = "grimoire.browserVault.assets.v1";
 
 interface StoredFile {
   content: string;
   updatedAt: string;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 function seedFiles(): Record<string, StoredFile> {
@@ -28,7 +45,7 @@ Grimoire is a Bear-style notes app where your notes are plain markdown files in 
 
 Type \`[[\` to link to another note — try it! For example: [[Project Polaris]].
 
-Cmd/Ctrl+Click a link to follow it. Open [[Project Polaris]] and look at the **Backlinks** section at the bottom: notes that link to it are grouped by their type, so you can see *where* a note is referenced from at a glance.
+Cmd/Ctrl+Click a link to follow it. Open [[Project Polaris]] and toggle the **Backlinks** sidebar with the link button at the top right: notes that link to it are grouped by their type, so you can see *where* a note is referenced from at a glance.
 
 > In the desktop app you point Grimoire at any folder of .md files and they show up here with their types.`,
     },
@@ -36,7 +53,7 @@ Cmd/Ctrl+Click a link to follow it. Open [[Project Polaris]] and look at the **B
       updatedAt: at(50),
       content: `# Project Polaris
 
-The star project. This note is linked from several places — check the Backlinks section below to see them grouped by type.
+The star project. This note is linked from several places — toggle the Backlinks sidebar (link icon, top right) to see them grouped by type.
 
 ## Goals
 
@@ -74,6 +91,7 @@ export class BrowserVault implements VaultBackend {
   readonly location = "Browser storage";
 
   private files: Record<string, StoredFile>;
+  private assets: Record<string, string>; // path -> base64 bytes
 
   constructor() {
     let stored: Record<string, StoredFile> | null = null;
@@ -85,6 +103,15 @@ export class BrowserVault implements VaultBackend {
     }
     this.files = stored ?? seedFiles();
     if (!stored) this.persist();
+
+    let assets: Record<string, string> | null = null;
+    try {
+      const raw = localStorage.getItem(ASSETS_KEY);
+      if (raw) assets = JSON.parse(raw) as Record<string, string>;
+    } catch {
+      assets = null;
+    }
+    this.assets = assets ?? {};
   }
 
   private persist() {
@@ -95,12 +122,30 @@ export class BrowserVault implements VaultBackend {
     }
   }
 
+  private persistAssets() {
+    try {
+      localStorage.setItem(ASSETS_KEY, JSON.stringify(this.assets));
+    } catch {
+      // storage full or unavailable — keep working in memory
+    }
+  }
+
   async loadAll(): Promise<VaultFile[]> {
-    return Object.entries(this.files).map(([path, file]) => ({
-      path,
-      content: file.content,
-      updatedAt: file.updatedAt,
-    }));
+    // only .md files are notes — config files (.grimoire/…) also live in
+    // `files` via write(), and must not show up as notes
+    return Object.entries(this.files)
+      .filter(([path]) => /\.md$/i.test(path))
+      .map(([path, file]) => ({
+        path,
+        content: file.content,
+        updatedAt: file.updatedAt,
+      }));
+  }
+
+  async readText(path: string): Promise<string> {
+    const file = this.files[path];
+    if (!file) throw new Error(`No such file: ${path}`);
+    return file.content;
   }
 
   async write(path: string, content: string): Promise<void> {
@@ -117,11 +162,27 @@ export class BrowserVault implements VaultBackend {
   }
 
   async removeFile(path: string): Promise<void> {
+    if (path in this.assets) {
+      delete this.assets[path];
+      this.persistAssets();
+      return;
+    }
     delete this.files[path];
     this.persist();
   }
 
   async exists(path: string): Promise<boolean> {
-    return path in this.files;
+    return path in this.files || path in this.assets;
+  }
+
+  async writeBinary(path: string, bytes: Uint8Array): Promise<void> {
+    this.assets[path] = bytesToBase64(bytes);
+    this.persistAssets();
+  }
+
+  async readBinary(path: string): Promise<Uint8Array> {
+    const stored = this.assets[path];
+    if (stored === undefined) throw new Error(`No such asset: ${path}`);
+    return base64ToBytes(stored);
   }
 }

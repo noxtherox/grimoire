@@ -6,6 +6,7 @@ import {
   TRASH_DIR,
   type Note,
   fileStem,
+  isRemoteUrl,
   isTrashed,
   logicalPath,
   noteTitle,
@@ -13,6 +14,13 @@ import {
   sanitizeFileStem,
   typeKey,
 } from "@/lib/note-utils";
+import {
+  type PropertyValue,
+  renameContentProperty,
+  setContentProperty,
+  withBody,
+} from "@/lib/frontmatter";
+import type { PropertyDef, PropertySchemas } from "@/lib/properties";
 import type { VaultBackend } from "@/lib/vault/backend";
 import { BrowserVault } from "@/lib/vault/browser";
 import { DesktopVault } from "@/lib/vault/desktop";
@@ -27,6 +35,8 @@ export interface VaultState {
   location: string | null;
   isDesktop: boolean;
   notes: Note[];
+  /** Per-type property definitions, keyed by type key ("work/projects"). */
+  schemas: PropertySchemas;
   error: string | null;
 }
 
@@ -35,6 +45,7 @@ let state: VaultState = {
   location: null,
   isDesktop: false,
   notes: [],
+  schemas: {},
   error: null,
 };
 
@@ -94,17 +105,34 @@ function savePinnedPaths() {
 
 // ---- vault lifecycle -------------------------------------------------------
 
+const SCHEMAS_PATH = ".grimoire/properties.json";
+
+async function loadSchemas(fromBackend: VaultBackend): Promise<PropertySchemas> {
+  try {
+    const raw = await fromBackend.readText(SCHEMAS_PATH);
+    const parsed = JSON.parse(raw) as PropertySchemas;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {}; // missing or unreadable — start empty
+  }
+}
+
 async function loadVault(nextBackend: VaultBackend) {
   backend = nextBackend;
+  clearImageUrlCache();
   setState({
     status: "loading",
     location: nextBackend.location,
     isDesktop: nextBackend.kind === "desktop",
     notes: [],
+    schemas: {},
     error: null,
   });
   try {
-    const files = await nextBackend.loadAll();
+    const [files, schemas] = await Promise.all([
+      nextBackend.loadAll(),
+      loadSchemas(nextBackend),
+    ]);
     const pinned = loadPinnedPaths();
     const notes: Note[] = files.map((file) => ({
       id: crypto.randomUUID(),
@@ -113,7 +141,7 @@ async function loadVault(nextBackend: VaultBackend) {
       pinned: pinned.has(file.path),
       updatedAt: file.updatedAt,
     }));
-    setState({ status: "ready", notes });
+    setState({ status: "ready", notes, schemas });
   } catch (error) {
     setState({ status: "error", error: String(error) });
   }
@@ -229,6 +257,179 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
     void flushAll();
   });
+}
+
+// ---- images ------------------------------------------------------------------
+
+const IMAGE_DIR = "assets";
+
+const EXT_BY_MIME: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+  "image/bmp": "bmp",
+};
+
+const MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+};
+
+const imageUrlCache = new Map<string, Promise<string | null>>();
+
+function clearImageUrlCache() {
+  for (const pending of imageUrlCache.values()) {
+    void pending.then((url) => {
+      if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+    });
+  }
+  imageUrlCache.clear();
+}
+
+/**
+ * Resolves a vault-relative image path to a displayable URL (a blob URL backed
+ * by the vault file). Remote URLs pass through untouched.
+ */
+export function getImageUrl(path: string): Promise<string | null> {
+  if (isRemoteUrl(path)) return Promise.resolve(path);
+  let cached = imageUrlCache.get(path);
+  if (!cached) {
+    cached = (async () => {
+      if (!backend) return null;
+      try {
+        const bytes = await backend.readBinary(decodeURI(path));
+        const ext = path.split(".").pop()?.toLowerCase() ?? "";
+        const type = MIME_BY_EXT[ext] ?? "application/octet-stream";
+        return URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
+      } catch {
+        return null;
+      }
+    })();
+    imageUrlCache.set(path, cached);
+  }
+  return cached;
+}
+
+/**
+ * Saves pasted/dropped image bytes into the vault's assets folder and returns
+ * the vault-relative path to reference from markdown, or null on failure.
+ */
+export async function savePastedImage(
+  bytes: Uint8Array,
+  mime: string,
+): Promise<string | null> {
+  if (!backend) return null;
+  const ext = EXT_BY_MIME[mime] ?? "png";
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace("T", "-")
+    .slice(0, 15);
+  let path = "";
+  for (let n = 0; ; n++) {
+    path = `${IMAGE_DIR}/pasted-${stamp}${n === 0 ? "" : `-${n}`}.${ext}`;
+    if (!(await backend.exists(path))) break;
+  }
+  try {
+    await backend.writeBinary(path, bytes);
+  } catch (error) {
+    reportError("save image", error);
+    return null;
+  }
+  return path;
+}
+
+// ---- note properties & per-type definitions ---------------------------------
+
+function saveSchemas(schemas: PropertySchemas) {
+  setState({ schemas });
+  if (!backend) return;
+  backend
+    .write(SCHEMAS_PATH, JSON.stringify(schemas, null, 2))
+    .catch((error) => reportError("save property definitions", error));
+}
+
+/** Non-trashed notes of the given type, including its sub-types. */
+function notesOfType(ownerKey: string): Note[] {
+  return state.notes.filter((note) => {
+    if (isTrashed(note)) return false;
+    const key = typeKey(noteTypePath(note));
+    return key === ownerKey || key.startsWith(`${ownerKey}/`);
+  });
+}
+
+export function addTypeProperty(ownerKey: string, def: PropertyDef) {
+  const defs = state.schemas[ownerKey] ?? [];
+  if (defs.some((d) => d.name.toLowerCase() === def.name.toLowerCase())) return;
+  saveSchemas({ ...state.schemas, [ownerKey]: [...defs, def] });
+}
+
+/** Edits a property definition; a rename migrates the key in every note of the type. */
+export function updateTypeProperty(
+  ownerKey: string,
+  oldName: string,
+  def: PropertyDef,
+) {
+  const defs = state.schemas[ownerKey] ?? [];
+  const idx = defs.findIndex(
+    (d) => d.name.toLowerCase() === oldName.toLowerCase(),
+  );
+  if (idx < 0) return;
+  const collides = defs.some(
+    (d, i) => i !== idx && d.name.toLowerCase() === def.name.toLowerCase(),
+  );
+  if (collides) return;
+  const next = defs.slice();
+  next[idx] = def;
+  saveSchemas({ ...state.schemas, [ownerKey]: next });
+  if (def.name !== oldName) {
+    for (const note of notesOfType(ownerKey)) {
+      const migrated = renameContentProperty(note.content, oldName, def.name);
+      if (migrated !== note.content) updateNoteContent(note.id, migrated);
+    }
+  }
+}
+
+/** Deletes a property from the type and strips its value from the type's notes. */
+export function removeTypeProperty(ownerKey: string, name: string) {
+  const defs = state.schemas[ownerKey] ?? [];
+  const next = defs.filter((d) => d.name.toLowerCase() !== name.toLowerCase());
+  if (next.length === defs.length) return;
+  const schemas = { ...state.schemas };
+  if (next.length) schemas[ownerKey] = next;
+  else delete schemas[ownerKey];
+  saveSchemas(schemas);
+  for (const note of notesOfType(ownerKey)) {
+    const stripped = setContentProperty(note.content, name, null);
+    if (stripped !== note.content) updateNoteContent(note.id, stripped);
+  }
+}
+
+/** Sets (or with `null`, clears) one property value in a note's frontmatter. */
+export function setNoteProperty(
+  id: string,
+  name: string,
+  value: PropertyValue | null,
+) {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!note) return;
+  const next = setContentProperty(note.content, name, value);
+  if (next !== note.content) updateNoteContent(id, next);
+}
+
+/** Replaces the note body from the editor, preserving frontmatter properties. */
+export function updateNoteBody(id: string, body: string) {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!note) return;
+  const next = withBody(note.content, body);
+  if (next !== note.content) updateNoteContent(id, next);
 }
 
 // ---- note operations -------------------------------------------------------
