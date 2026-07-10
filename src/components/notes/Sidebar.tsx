@@ -5,6 +5,7 @@ import {
   Folder,
   FolderOpen,
   Notebook,
+  Plus,
   RefreshCw,
   Trash2,
 } from "lucide-react";
@@ -14,13 +15,20 @@ import {
   type TypeNode,
   buildTypeTree,
   isTrashed,
+  parseTypePath,
   typeKey,
 } from "@/lib/note-utils";
 import type { NoteFilter } from "@/lib/filters";
-import { chooseVaultFolder, reloadVault } from "@/store/notes-store";
+import {
+  chooseVaultFolder,
+  createType,
+  reloadVault,
+} from "@/store/notes-store";
 
 interface SidebarProps {
   notes: Note[];
+  /** Types that exist without notes (empty folders) — shown with count 0. */
+  extraTypes: string[][];
   filter: NoteFilter;
   isDesktop: boolean;
   vaultLocation: string | null;
@@ -150,14 +158,26 @@ function TypeTreeRows({
 
 export function Sidebar({
   notes,
+  extraTypes,
   filter,
   isDesktop,
   vaultLocation,
   onFilterChange,
 }: SidebarProps) {
-  const tree = buildTypeTree(notes);
+  const tree = buildTypeTree(notes, extraTypes);
   const activeCount = notes.filter((note) => !isTrashed(note)).length;
   const trashCount = notes.filter((note) => isTrashed(note)).length;
+
+  // null = not creating a type; otherwise the draft text in the inline input
+  const [typeDraft, setTypeDraft] = useState<string | null>(null);
+
+  const submitNewType = async () => {
+    const path = parseTypePath(typeDraft ?? "");
+    setTypeDraft(null);
+    if (!path.length) return;
+    const created = await createType(path);
+    if (created) onFilterChange({ kind: "type", path });
+  };
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // expanded = everything not explicitly collapsed (small trees read better open)
@@ -204,9 +224,39 @@ export function Sidebar({
           label="All Notes"
           count={activeCount}
         />
-        <div className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">
-          Types
+        <div className="flex items-center justify-between pb-1 pl-3 pr-2 pt-4">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-600">
+            Types
+          </span>
+          <button
+            onClick={() => setTypeDraft("")}
+            title="New type — it can stay empty until you add notes"
+            className="text-zinc-600 transition-colors hover:text-zinc-300"
+          >
+            <Plus size={13} />
+          </button>
         </div>
+        {typeDraft !== null && (
+          <form
+            className="px-1 pb-1"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitNewType();
+            }}
+          >
+            <input
+              autoFocus
+              value={typeDraft}
+              onChange={(event) => setTypeDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setTypeDraft(null);
+              }}
+              onBlur={() => setTypeDraft(null)}
+              placeholder="new type (e.g. work/projects)"
+              className="w-full rounded-md border border-white/10 bg-white/5 px-2 py-1 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-white/25"
+            />
+          </form>
+        )}
         <TypeTreeRows
           nodes={tree}
           depth={0}

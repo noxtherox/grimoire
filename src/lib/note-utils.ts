@@ -150,8 +150,14 @@ export interface TypeNode {
   children: TypeNode[];
 }
 
-/** Builds the type tree (max 3 levels) from non-trashed notes. */
-export function buildTypeTree(notes: Note[]): TypeNode[] {
+/**
+ * Builds the type tree (max 3 levels) from non-trashed notes, plus
+ * `extraTypePaths` — types that exist as folders but hold no notes yet.
+ */
+export function buildTypeTree(
+  notes: Note[],
+  extraTypePaths: string[][] = [],
+): TypeNode[] {
   const roots: TypeNode[] = [];
   const ensureChild = (list: TypeNode[], name: string, path: string[]) => {
     let node = list.find((child) => child.name === name);
@@ -162,9 +168,7 @@ export function buildTypeTree(notes: Note[]): TypeNode[] {
     }
     return node;
   };
-  for (const note of notes) {
-    if (isTrashed(note)) continue;
-    const typePath = noteTypePath(note);
+  const addPath = (typePath: string[], countDelta: number) => {
     let level = roots;
     for (let depth = 0; depth < typePath.length; depth++) {
       const node = ensureChild(
@@ -172,23 +176,36 @@ export function buildTypeTree(notes: Note[]): TypeNode[] {
         typePath[depth],
         typePath.slice(0, depth + 1),
       );
-      node.count += 1;
+      node.count += countDelta;
       level = node.children;
     }
+  };
+  for (const typePath of extraTypePaths) {
+    addPath(typePath.slice(0, MAX_TYPE_DEPTH), 0);
+  }
+  for (const note of notes) {
+    if (isTrashed(note)) continue;
+    addPath(noteTypePath(note), 1);
   }
   return roots;
 }
 
 /** All distinct type paths in use, including intermediate levels. */
-export function getAllTypePaths(notes: Note[]): string[][] {
+export function getAllTypePaths(
+  notes: Note[],
+  extraTypePaths: string[][] = [],
+): string[][] {
   const seen = new Map<string, string[]>();
-  for (const note of notes) {
-    if (isTrashed(note)) continue;
-    const typePath = noteTypePath(note);
-    for (let depth = 1; depth <= typePath.length; depth++) {
-      const prefix = typePath.slice(0, depth);
+  const add = (typePath: string[]) => {
+    const clamped = typePath.slice(0, MAX_TYPE_DEPTH);
+    for (let depth = 1; depth <= clamped.length; depth++) {
+      const prefix = clamped.slice(0, depth);
       seen.set(typeKey(prefix), prefix);
     }
+  };
+  for (const typePath of extraTypePaths) add(typePath);
+  for (const note of notes) {
+    if (!isTrashed(note)) add(noteTypePath(note));
   }
   return [...seen.values()].sort((a, b) =>
     typeKey(a).localeCompare(typeKey(b)),

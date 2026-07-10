@@ -113,6 +113,7 @@ const Index = () => {
         <ResizablePanel defaultSize={17} minSize={12} maxSize={28}>
           <Sidebar
             notes={notes}
+            extraTypes={vault.extraTypes}
             filter={filter}
             isDesktop={vault.isDesktop}
             vaultLocation={vault.location}
@@ -136,6 +137,7 @@ const Index = () => {
           <EditorPane
             note={selectedNote}
             allNotes={notes}
+            extraTypes={vault.extraTypes}
             onOpenNote={handleOpenNote}
           />
         </ResizablePanel>

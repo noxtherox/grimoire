@@ -92,6 +92,25 @@ export class DesktopVault implements VaultBackend {
     return exists(this.abs(path));
   }
 
+  async mkDir(path: string): Promise<void> {
+    await mkdir(this.abs(path), { recursive: true });
+  }
+
+  async listDirs(): Promise<string[]> {
+    const dirs: string[] = [];
+    const walk = async (relDir: string, depth: number): Promise<void> => {
+      const entries = await readDir(relDir ? this.abs(relDir) : this.root);
+      for (const entry of entries) {
+        if (!entry.isDirectory || entry.name.startsWith(".")) continue;
+        const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+        dirs.push(relPath);
+        if (depth + 1 < MAX_TYPE_DEPTH) await walk(relPath, depth + 1);
+      }
+    };
+    await walk("", 0);
+    return dirs;
+  }
+
   async writeBinary(path: string, bytes: Uint8Array): Promise<void> {
     await this.ensureParentDir(path);
     await writeFile(this.abs(path), bytes);
