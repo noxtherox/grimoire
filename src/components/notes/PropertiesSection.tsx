@@ -183,9 +183,11 @@ function DefForm({ initial, submitLabel, onSubmit, onDelete }: DefFormProps) {
 
 interface PropertiesSectionProps {
   note: Note;
+  expanded?: boolean;
 }
 
-export function PropertiesSection({ note }: PropertiesSectionProps) {
+export function PropertiesSection({ note, expanded }: PropertiesSectionProps) {
+  const nameColumnClass = expanded ? "w-48" : "w-28";
   const { schemas } = useVault();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
@@ -237,7 +239,7 @@ export function PropertiesSection({ note }: PropertiesSectionProps) {
               >
                 <PopoverTrigger asChild>
                   <button
-                    className="flex w-28 shrink-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    className={`flex ${nameColumnClass} shrink-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground`}
                     title={
                       inherited
                         ? `Defined on "${ownerKey}" — applies to all its sub-types`
@@ -288,7 +290,7 @@ export function PropertiesSection({ note }: PropertiesSectionProps) {
               >
                 <PopoverTrigger asChild>
                   <button
-                    className="flex w-28 shrink-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs italic text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    className={`flex ${nameColumnClass} shrink-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs italic text-muted-foreground hover:bg-muted/60 hover:text-foreground`}
                     title="Only on this note — not part of the type"
                   >
                     <Icon size={12} className="shrink-0 opacity-70" />

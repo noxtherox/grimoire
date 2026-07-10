@@ -33,6 +33,7 @@ interface EditorPaneProps {
 
 export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
   const [showBacklinks, setShowBacklinks] = useState(false);
+  const [expandBacklinks, setExpandBacklinks] = useState(false);
 
   if (!note) {
     return (
@@ -119,7 +120,13 @@ export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
         </Button>
       </div>
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
+        {/* Hidden (not unmounted) while the panel is expanded so the editor keeps its state. */}
+        <div
+          className={cn(
+            "min-w-0 flex-1",
+            showBacklinks && expandBacklinks && "hidden",
+          )}
+        >
           {/* The editor only sees the body; frontmatter properties live in the sidebar. */}
           <MarkdownEditor
             noteId={note.id}
@@ -139,6 +146,8 @@ export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
             note={note}
             allNotes={allNotes}
             onOpenNote={onOpenNote}
+            expanded={expandBacklinks}
+            onToggleExpanded={() => setExpandBacklinks((open) => !open)}
           />
         )}
       </div>
