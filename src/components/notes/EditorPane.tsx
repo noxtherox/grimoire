@@ -1,4 +1,5 @@
-import { Pin, Trash2, Undo2 } from "lucide-react";
+import { useState } from "react";
+import { Link2, Pin, Trash2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
 import { TypePicker } from "./TypePicker";
@@ -7,10 +8,12 @@ import {
   type Note,
   findNoteByTitle,
   getAllTypePaths,
+  getBacklinksGroupedByType,
   isTrashed,
   noteTitle,
   noteTypePath,
 } from "@/lib/note-utils";
+import { noteBody } from "@/lib/frontmatter";
 import {
   createNote,
   getNotes,
@@ -18,7 +21,7 @@ import {
   setNoteType,
   toggleNotePinned,
   trashNote,
-  updateNoteContent,
+  updateNoteBody,
 } from "@/store/notes-store";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +32,8 @@ interface EditorPaneProps {
 }
 
 export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
+  const [showBacklinks, setShowBacklinks] = useState(false);
+
   if (!note) {
     return (
       <div className="flex h-full items-center justify-center bg-white">
@@ -39,6 +44,10 @@ export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
       </div>
     );
   }
+
+  const backlinkCount = [
+    ...getBacklinksGroupedByType(note, allNotes).values(),
+  ].reduce((sum, group) => sum + group.length, 0);
 
   const handleFollowLink = async (title: string) => {
     // Read the freshest notes — the store may be ahead of this render
@@ -91,22 +100,48 @@ export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
             </Button>
           </>
         )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "relative h-7 w-7",
+            showBacklinks && "bg-muted text-[hsl(4_66%_55%)]",
+          )}
+          title={showBacklinks ? "Hide backlinks" : "Show backlinks"}
+          onClick={() => setShowBacklinks((open) => !open)}
+        >
+          <Link2 size={15} />
+          {backlinkCount > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[hsl(4_66%_55%)] px-0.5 text-[9px] font-semibold leading-none text-white tabular-nums">
+              {backlinkCount}
+            </span>
+          )}
+        </Button>
       </div>
-      <div className="min-h-0 flex-1">
-        <MarkdownEditor
-          noteId={note.id}
-          initialContent={note.content}
-          getLinkableTitles={() =>
-            getNotes()
-              .filter((other) => !isTrashed(other) && other.id !== note.id)
-              .map((other) => noteTitle(other))
-          }
-          isTitleResolved={(title) => !!findNoteByTitle(title, getNotes())}
-          onChange={(content) => updateNoteContent(note.id, content)}
-          onFollowLink={(title) => void handleFollowLink(title)}
-        />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1">
+          {/* The editor only sees the body; frontmatter properties live in the sidebar. */}
+          <MarkdownEditor
+            noteId={note.id}
+            initialContent={noteBody(note.content)}
+            getLinkableTitles={() =>
+              getNotes()
+                .filter((other) => !isTrashed(other) && other.id !== note.id)
+                .map((other) => noteTitle(other))
+            }
+            isTitleResolved={(title) => !!findNoteByTitle(title, getNotes())}
+            onChange={(body) => updateNoteBody(note.id, body)}
+            onFollowLink={(title) => void handleFollowLink(title)}
+          />
+        </div>
+        {showBacklinks && (
+          <BacklinksPanel
+            note={note}
+            allNotes={allNotes}
+            onOpenNote={onOpenNote}
+          />
+        )}
       </div>
-      <BacklinksPanel note={note} allNotes={allNotes} onOpenNote={onOpenNote} />
     </div>
   );
 }

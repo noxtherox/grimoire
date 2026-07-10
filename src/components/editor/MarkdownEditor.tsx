@@ -12,6 +12,9 @@ import {
   inlineTagExtension,
   wikilinkAutocomplete,
 } from "./markdown-extensions";
+import { imagePasteExtension, imagePreviewExtension } from "./image-extension";
+import { livePreviewExtension } from "./live-preview";
+import { getImageUrl, savePastedImage } from "@/store/notes-store";
 
 interface MarkdownEditorProps {
   noteId: string;
@@ -57,6 +60,7 @@ export function MarkdownEditor({
         keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap]),
         markdown({ base: markdownLanguage, codeLanguages: languages }),
         markdownHighlighting,
+        livePreviewExtension(),
         editorTheme,
         EditorView.lineWrapping,
         placeholder("Start writing… the first line becomes the title."),
@@ -66,6 +70,8 @@ export function MarkdownEditor({
           onFollow: (title) => callbacksRef.current.onFollowLink(title),
         }),
         wikilinkAutocomplete(() => callbacksRef.current.getLinkableTitles()),
+        imagePreviewExtension(getImageUrl),
+        imagePasteExtension(savePastedImage),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             callbacksRef.current.onChange(update.state.doc.toString());

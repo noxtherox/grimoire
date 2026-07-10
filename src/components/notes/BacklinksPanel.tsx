@@ -1,7 +1,9 @@
 import { Folder, Link2 } from "lucide-react";
+import { PropertiesSection } from "./PropertiesSection";
 import {
   type Note,
   getBacklinksGroupedByType,
+  isTrashed,
   noteSnippet,
   noteTitle,
 } from "@/lib/note-utils";
@@ -24,19 +26,20 @@ export function BacklinksPanel({
   );
 
   return (
-    <div className="border-t border-border/60 bg-[hsl(40_20%_98%)] px-8 py-4">
-      <div className="mx-auto max-w-[46rem]">
-        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          <Link2 size={13} />
-          Backlinks
-          {total > 0 && (
-            <span className="rounded-full bg-muted px-1.5 tabular-nums">
-              {total}
-            </span>
-          )}
-        </div>
+    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border/60 bg-[hsl(40_20%_98%)]">
+      {!isTrashed(note) && <PropertiesSection note={note} />}
+      <div className="flex items-center gap-1.5 border-b border-border/60 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <Link2 size={13} />
+        Backlinks
+        {total > 0 && (
+          <span className="rounded-full bg-muted px-1.5 tabular-nums">
+            {total}
+          </span>
+        )}
+      </div>
+      <div className="min-h-0 flex-1 px-4 py-3">
         {total === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             No notes link here yet. Reference this note elsewhere with{" "}
             <code className="rounded bg-muted px-1">
               [[{noteTitle(note)}]]
@@ -44,7 +47,7 @@ export function BacklinksPanel({
             .
           </p>
         ) : (
-          <div className="mt-3 space-y-4">
+          <div className="space-y-4">
             {[...groups.entries()].map(([type, linkingNotes]) => (
               <div key={type}>
                 <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-[hsl(4_50%_45%)]">
@@ -78,6 +81,6 @@ export function BacklinksPanel({
           </div>
         )}
       </div>
-    </div>
+    </aside>
   );
 }
