@@ -16,6 +16,10 @@ export interface VaultBackend {
   move(from: string, to: string): Promise<void>;
   removeFile(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
+  /** Creates a folder so a type can exist before it has any notes. */
+  mkDir(path: string): Promise<void>;
+  /** All note folders (vault-relative), including ones with no notes. */
+  listDirs(): Promise<string[]>;
   /** Binary asset support (pasted images etc.). */
   writeBinary(path: string, bytes: Uint8Array): Promise<void>;
   readBinary(path: string): Promise<Uint8Array>;

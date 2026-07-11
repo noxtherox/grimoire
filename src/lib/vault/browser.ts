@@ -2,6 +2,7 @@ import type { VaultBackend, VaultFile } from "./backend";
 
 const STORAGE_KEY = "grimoire.browserVault.v1";
 const ASSETS_KEY = "grimoire.browserVault.assets.v1";
+const DIRS_KEY = "grimoire.browserVault.dirs.v1";
 
 interface StoredFile {
   content: string;
@@ -92,6 +93,7 @@ export class BrowserVault implements VaultBackend {
 
   private files: Record<string, StoredFile>;
   private assets: Record<string, string>; // path -> base64 bytes
+  private dirs: string[]; // folders declared without notes (empty types)
 
   constructor() {
     let stored: Record<string, StoredFile> | null = null;
@@ -112,6 +114,15 @@ export class BrowserVault implements VaultBackend {
       assets = null;
     }
     this.assets = assets ?? {};
+
+    let dirs: string[] | null = null;
+    try {
+      const raw = localStorage.getItem(DIRS_KEY);
+      if (raw) dirs = JSON.parse(raw) as string[];
+    } catch {
+      dirs = null;
+    }
+    this.dirs = dirs ?? [];
   }
 
   private persist() {
@@ -125,6 +136,14 @@ export class BrowserVault implements VaultBackend {
   private persistAssets() {
     try {
       localStorage.setItem(ASSETS_KEY, JSON.stringify(this.assets));
+    } catch {
+      // storage full or unavailable — keep working in memory
+    }
+  }
+
+  private persistDirs() {
+    try {
+      localStorage.setItem(DIRS_KEY, JSON.stringify(this.dirs));
     } catch {
       // storage full or unavailable — keep working in memory
     }
@@ -173,6 +192,16 @@ export class BrowserVault implements VaultBackend {
 
   async exists(path: string): Promise<boolean> {
     return path in this.files || path in this.assets;
+  }
+
+  async mkDir(path: string): Promise<void> {
+    if (this.dirs.includes(path)) return;
+    this.dirs.push(path);
+    this.persistDirs();
+  }
+
+  async listDirs(): Promise<string[]> {
+    return [...this.dirs];
   }
 
   async writeBinary(path: string, bytes: Uint8Array): Promise<void> {

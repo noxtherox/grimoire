@@ -28,10 +28,17 @@ import { cn } from "@/lib/utils";
 interface EditorPaneProps {
   note: Note | null;
   allNotes: Note[];
+  /** Types that exist without notes — offered by the type picker too. */
+  extraTypes: string[][];
   onOpenNote: (id: string) => void;
 }
 
-export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
+export function EditorPane({
+  note,
+  allNotes,
+  extraTypes,
+  onOpenNote,
+}: EditorPaneProps) {
   const [showBacklinks, setShowBacklinks] = useState(false);
   const [expandBacklinks, setExpandBacklinks] = useState(false);
 
@@ -66,7 +73,7 @@ export function EditorPane({ note, allNotes, onOpenNote }: EditorPaneProps) {
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
         <TypePicker
           value={noteTypePath(note)}
-          existingTypePaths={getAllTypePaths(allNotes)}
+          existingTypePaths={getAllTypePaths(allNotes, extraTypes)}
           onChange={(typePath) => void setNoteType(note.id, typePath)}
         />
         <div className="flex-1" />

@@ -3,6 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   DEFAULT_TYPE,
+  MAX_TYPE_DEPTH,
   TRASH_DIR,
   type Note,
   fileStem,
@@ -35,6 +36,8 @@ export interface VaultState {
   location: string | null;
   isDesktop: boolean;
   notes: Note[];
+  /** Types that exist as folders even without notes in them (empty types). */
+  extraTypes: string[][];
   /** Per-type property definitions, keyed by type key ("work/projects"). */
   schemas: PropertySchemas;
   error: string | null;
@@ -45,6 +48,7 @@ let state: VaultState = {
   location: null,
   isDesktop: false,
   notes: [],
+  extraTypes: [],
   schemas: {},
   error: null,
 };
@@ -125,13 +129,15 @@ async function loadVault(nextBackend: VaultBackend) {
     location: nextBackend.location,
     isDesktop: nextBackend.kind === "desktop",
     notes: [],
+    extraTypes: [],
     schemas: {},
     error: null,
   });
   try {
-    const [files, schemas] = await Promise.all([
+    const [files, schemas, dirs] = await Promise.all([
       nextBackend.loadAll(),
       loadSchemas(nextBackend),
+      nextBackend.listDirs(),
     ]);
     const pinned = loadPinnedPaths();
     const notes: Note[] = files.map((file) => ({
@@ -141,7 +147,11 @@ async function loadVault(nextBackend: VaultBackend) {
       pinned: pinned.has(file.path),
       updatedAt: file.updatedAt,
     }));
-    setState({ status: "ready", notes, schemas });
+    // folders are types — except the assets folder, which holds images
+    const extraTypes = dirs
+      .filter((dir) => dir !== IMAGE_DIR && !dir.startsWith(`${IMAGE_DIR}/`))
+      .map((dir) => dir.split("/").slice(0, MAX_TYPE_DEPTH));
+    setState({ status: "ready", notes, extraTypes, schemas });
   } catch (error) {
     setState({ status: "error", error: String(error) });
   }
@@ -430,6 +440,27 @@ export function updateNoteBody(id: string, body: string) {
   if (!note) return;
   const next = withBody(note.content, body);
   if (next !== note.content) updateNoteContent(id, next);
+}
+
+// ---- type operations ---------------------------------------------------------
+
+/**
+ * Creates a type (a folder) without putting any note in it — empty types are
+ * fine and show up in the sidebar with a count of 0.
+ */
+export async function createType(typePath: string[]): Promise<boolean> {
+  if (!backend || !typePath.length) return false;
+  const key = typeKey(typePath);
+  try {
+    await backend.mkDir(key);
+  } catch (error) {
+    reportError("create type", error);
+    return false;
+  }
+  if (!state.extraTypes.some((path) => typeKey(path) === key)) {
+    setState({ extraTypes: [...state.extraTypes, typePath] });
+  }
+  return true;
 }
 
 // ---- note operations -------------------------------------------------------
