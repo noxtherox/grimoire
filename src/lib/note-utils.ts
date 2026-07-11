@@ -1,3 +1,5 @@
+import { noteBody } from "@/lib/frontmatter";
+
 export const TRASH_DIR = ".trash";
 export const MAX_TYPE_DEPTH = 3;
 export const DEFAULT_TYPE: string[] = ["inbox"];
@@ -17,6 +19,35 @@ export interface Note {
 }
 
 export const WIKILINK_REGEX = /\[\[([^[\]]+)\]\]/g;
+
+/**
+ * Markdown image: `![alt](path)`. An optional `|width` suffix in the alt text
+ * (`![screenshot|320](assets/foo.png)`) sets the preview width in pixels —
+ * the same convention Obsidian uses.
+ */
+export const IMAGE_MD_REGEX = /!\[([^\]]*)\]\(([^()\s]+)\)/g;
+
+export function isRemoteUrl(path: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(path);
+}
+
+/** Splits `alt|320` into the plain alt text and the width, if present. */
+export function parseImageAlt(alt: string): {
+  alt: string;
+  width: number | null;
+} {
+  const match = alt.match(/^(.*?)\|(\d+)$/);
+  if (!match) return { alt, width: null };
+  return { alt: match[1], width: parseInt(match[2], 10) };
+}
+
+export function formatImageMarkdown(
+  alt: string,
+  width: number | null,
+  path: string,
+): string {
+  return `![${width ? `${alt}|${width}` : alt}](${path})`;
+}
 
 export function isTrashed(note: Note): boolean {
   return note.path.startsWith(`${TRASH_DIR}/`);
@@ -42,9 +73,9 @@ export function fileStem(path: string): string {
   return name.replace(/\.md$/i, "");
 }
 
-/** Title = first non-empty line of content, else the filename. */
+/** Title = first non-empty body line (frontmatter excluded), else the filename. */
 export function noteTitle(note: Note): string {
-  const firstLine = note.content
+  const firstLine = noteBody(note.content)
     .split("\n")
     .map((line) => line.trim())
     .find((line) => line.length > 0);
@@ -53,7 +84,9 @@ export function noteTitle(note: Note): string {
 }
 
 export function noteSnippet(note: Note): string {
-  const lines = note.content.split("\n").map((line) => line.trim());
+  const lines = noteBody(note.content)
+    .split("\n")
+    .map((line) => line.trim());
   const firstIdx = lines.findIndex((line) => line.length > 0);
   const rest = lines
     .slice(firstIdx + 1)
@@ -67,7 +100,7 @@ export function noteSnippet(note: Note): string {
 
 export function getOutgoingLinkTitles(content: string): string[] {
   const titles: string[] = [];
-  for (const match of content.matchAll(WIKILINK_REGEX)) {
+  for (const match of noteBody(content).matchAll(WIKILINK_REGEX)) {
     titles.push(match[1].trim());
   }
   return titles;
