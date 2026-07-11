@@ -463,6 +463,41 @@ export async function createType(typePath: string[]): Promise<boolean> {
   return true;
 }
 
+/**
+ * Deletes a type (and its sub-types): every note in it is moved to Trash
+ * first — recoverable via restore — then the now-empty folder is removed.
+ */
+export async function deleteType(typePath: string[]): Promise<boolean> {
+  if (!backend || !typePath.length) return false;
+  const key = typeKey(typePath);
+  await flushAll();
+  for (const note of notesOfType(key)) {
+    await trashNote(note.id);
+  }
+  try {
+    await backend.removeDir(key);
+  } catch (error) {
+    reportError("delete type", error);
+    return false;
+  }
+  const schemas = { ...state.schemas };
+  let schemasChanged = false;
+  for (const schemaKey of Object.keys(schemas)) {
+    if (schemaKey === key || schemaKey.startsWith(`${key}/`)) {
+      delete schemas[schemaKey];
+      schemasChanged = true;
+    }
+  }
+  if (schemasChanged) saveSchemas(schemas);
+  setState({
+    extraTypes: state.extraTypes.filter((path) => {
+      const otherKey = typeKey(path);
+      return otherKey !== key && !otherKey.startsWith(`${key}/`);
+    }),
+  });
+  return true;
+}
+
 // ---- note operations -------------------------------------------------------
 
 export async function createNote(

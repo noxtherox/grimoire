@@ -22,8 +22,26 @@ import type { NoteFilter } from "@/lib/filters";
 import {
   chooseVaultFolder,
   createType,
+  deleteType,
   reloadVault,
 } from "@/store/notes-store";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { buttonVariants } from "@/components/ui/button";
 
 interface SidebarProps {
   notes: Note[];
@@ -104,6 +122,7 @@ function TypeTreeRows({
   expanded,
   onFilterChange,
   onToggle,
+  onDeleteType,
 }: {
   nodes: TypeNode[];
   depth: number;
@@ -111,6 +130,7 @@ function TypeTreeRows({
   expanded: Set<string>;
   onFilterChange: (filter: NoteFilter) => void;
   onToggle: (key: string) => void;
+  onDeleteType: (node: TypeNode) => void;
 }) {
   return (
     <>
@@ -121,24 +141,44 @@ function TypeTreeRows({
           filter.kind === "type" && typeKey(filter.path) === key;
         return (
           <div key={key}>
-            <SidebarRow
-              active={active}
-              onClick={() => onFilterChange({ kind: "type", path: node.path })}
-              icon={
-                isOpen && node.children.length ? (
-                  <FolderOpen size={15} />
-                ) : (
-                  <Folder size={15} />
-                )
-              }
-              label={node.name}
-              count={node.count}
-              depth={depth}
-              chevron={
-                node.children.length ? (isOpen ? "open" : "closed") : "leaf"
-              }
-              onToggle={() => onToggle(key)}
-            />
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <div>
+                  <SidebarRow
+                    active={active}
+                    onClick={() =>
+                      onFilterChange({ kind: "type", path: node.path })
+                    }
+                    icon={
+                      isOpen && node.children.length ? (
+                        <FolderOpen size={15} />
+                      ) : (
+                        <Folder size={15} />
+                      )
+                    }
+                    label={node.name}
+                    count={node.count}
+                    depth={depth}
+                    chevron={
+                      node.children.length
+                        ? isOpen
+                          ? "open"
+                          : "closed"
+                        : "leaf"
+                    }
+                    onToggle={() => onToggle(key)}
+                  />
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem
+                  className="text-destructive"
+                  onClick={() => onDeleteType(node)}
+                >
+                  <Trash2 size={14} className="mr-2" /> Delete type
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
             {isOpen && node.children.length > 0 && (
               <TypeTreeRows
                 nodes={node.children}
@@ -147,6 +187,7 @@ function TypeTreeRows({
                 expanded={expanded}
                 onFilterChange={onFilterChange}
                 onToggle={onToggle}
+                onDeleteType={onDeleteType}
               />
             )}
           </div>
@@ -177,6 +218,21 @@ export function Sidebar({
     if (!path.length) return;
     const created = await createType(path);
     if (created) onFilterChange({ kind: "type", path });
+  };
+
+  // Type pending a delete confirmation, or null when no dialog is open
+  const [deleteTarget, setDeleteTarget] = useState<TypeNode | null>(null);
+
+  const confirmDeleteType = async () => {
+    if (!deleteTarget) return;
+    const key = typeKey(deleteTarget.path);
+    setDeleteTarget(null);
+    const deleted = await deleteType(deleteTarget.path);
+    if (!deleted) return;
+    const activeKey = filter.kind === "type" ? typeKey(filter.path) : null;
+    if (activeKey && (activeKey === key || activeKey.startsWith(`${key}/`))) {
+      onFilterChange({ kind: "all" });
+    }
   };
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -264,6 +320,7 @@ export function Sidebar({
           expanded={expanded}
           onFilterChange={onFilterChange}
           onToggle={toggle}
+          onDeleteType={setDeleteTarget}
         />
       </nav>
       <div className="space-y-0.5 border-t border-white/10 p-2">
@@ -284,6 +341,37 @@ export function Sidebar({
           </button>
         )}
       </div>
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete type "{deleteTarget?.name}"?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget && deleteTarget.count > 0
+                ? `${deleteTarget.count} note${deleteTarget.count === 1 ? "" : "s"} in this type will be moved to Trash.`
+                : "This type has no notes."}
+              {deleteTarget && deleteTarget.children.length > 0 && (
+                <> Its sub-types will be deleted too.</>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => void confirmDeleteType()}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -18,6 +18,8 @@ export interface VaultBackend {
   exists(path: string): Promise<boolean>;
   /** Creates a folder so a type can exist before it has any notes. */
   mkDir(path: string): Promise<void>;
+  /** Removes a folder and everything still inside it (deleting a type). */
+  removeDir(path: string): Promise<void>;
   /** All note folders (vault-relative), including ones with no notes. */
   listDirs(): Promise<string[]>;
   /** Binary asset support (pasted images etc.). */
