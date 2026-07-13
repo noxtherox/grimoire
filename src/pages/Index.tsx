@@ -138,6 +138,7 @@ const Index = () => {
             note={selectedNote}
             allNotes={notes}
             extraTypes={vault.extraTypes}
+            schemas={vault.schemas}
             onOpenNote={handleOpenNote}
           />
         </ResizablePanel>

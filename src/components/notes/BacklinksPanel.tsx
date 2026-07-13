@@ -1,18 +1,15 @@
 import { Folder, Link2, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PropertiesSection } from "./PropertiesSection";
-import {
-  type Note,
-  getBacklinksGroupedByType,
-  isTrashed,
-  noteSnippet,
-  noteTitle,
-} from "@/lib/note-utils";
+import { getBacklinksGroupedByType } from "@/lib/links";
+import { type Note, isTrashed, noteSnippet, noteTitle } from "@/lib/note-utils";
+import type { PropertySchemas } from "@/lib/properties";
 import { cn } from "@/lib/utils";
 
 interface BacklinksPanelProps {
   note: Note;
   allNotes: Note[];
+  schemas: PropertySchemas;
   onOpenNote: (id: string) => void;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -21,11 +18,12 @@ interface BacklinksPanelProps {
 export function BacklinksPanel({
   note,
   allNotes,
+  schemas,
   onOpenNote,
   expanded,
   onToggleExpanded,
 }: BacklinksPanelProps) {
-  const groups = getBacklinksGroupedByType(note, allNotes);
+  const groups = getBacklinksGroupedByType(note, allNotes, schemas);
   const total = [...groups.values()].reduce(
     (sum, group) => sum + group.length,
     0,
@@ -72,8 +70,8 @@ export function BacklinksPanel({
             No notes link here yet. Reference this note elsewhere with{" "}
             <code className="rounded bg-muted px-1">
               [[{noteTitle(note)}]]
-            </code>
-            .
+            </code>{" "}
+            or a relation property.
           </p>
         ) : (
           <div className="space-y-4">
