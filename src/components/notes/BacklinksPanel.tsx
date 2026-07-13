@@ -49,7 +49,14 @@ export function BacklinksPanel({
           {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </Button>
       </div>
-      {!isTrashed(note) && <PropertiesSection note={note} expanded={expanded} />}
+      {!isTrashed(note) && (
+        <PropertiesSection
+          note={note}
+          allNotes={allNotes}
+          onOpenNote={onOpenNote}
+          expanded={expanded}
+        />
+      )}
       <div className="flex items-center gap-1.5 border-b border-border/60 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         <Link2 size={13} />
         Backlinks

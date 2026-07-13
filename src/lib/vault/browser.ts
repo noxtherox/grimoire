@@ -200,6 +200,20 @@ export class BrowserVault implements VaultBackend {
     this.persistDirs();
   }
 
+  async removeDir(path: string): Promise<void> {
+    const prefix = `${path}/`;
+    this.dirs = this.dirs.filter(
+      (dir) => dir !== path && !dir.startsWith(prefix),
+    );
+    this.persistDirs();
+    for (const filePath of Object.keys(this.files)) {
+      if (filePath === path || filePath.startsWith(prefix)) {
+        delete this.files[filePath];
+      }
+    }
+    this.persist();
+  }
+
   async listDirs(): Promise<string[]> {
     return [...this.dirs];
   }

@@ -12,6 +12,7 @@ import {
   logicalPath,
   noteTitle,
   noteTypePath,
+  notesOfTypeKey,
   sanitizeFileStem,
   typeKey,
 } from "@/lib/note-utils";
@@ -366,13 +367,8 @@ function saveSchemas(schemas: PropertySchemas) {
     .catch((error) => reportError("save property definitions", error));
 }
 
-/** Non-trashed notes of the given type, including its sub-types. */
 function notesOfType(ownerKey: string): Note[] {
-  return state.notes.filter((note) => {
-    if (isTrashed(note)) return false;
-    const key = typeKey(noteTypePath(note));
-    return key === ownerKey || key.startsWith(`${ownerKey}/`);
-  });
+  return notesOfTypeKey(state.notes, ownerKey);
 }
 
 export function addTypeProperty(ownerKey: string, def: PropertyDef) {
@@ -460,6 +456,41 @@ export async function createType(typePath: string[]): Promise<boolean> {
   if (!state.extraTypes.some((path) => typeKey(path) === key)) {
     setState({ extraTypes: [...state.extraTypes, typePath] });
   }
+  return true;
+}
+
+/**
+ * Deletes a type (and its sub-types): every note in it is moved to Trash
+ * first — recoverable via restore — then the now-empty folder is removed.
+ */
+export async function deleteType(typePath: string[]): Promise<boolean> {
+  if (!backend || !typePath.length) return false;
+  const key = typeKey(typePath);
+  await flushAll();
+  for (const note of notesOfType(key)) {
+    await trashNote(note.id);
+  }
+  try {
+    await backend.removeDir(key);
+  } catch (error) {
+    reportError("delete type", error);
+    return false;
+  }
+  const schemas = { ...state.schemas };
+  let schemasChanged = false;
+  for (const schemaKey of Object.keys(schemas)) {
+    if (schemaKey === key || schemaKey.startsWith(`${key}/`)) {
+      delete schemas[schemaKey];
+      schemasChanged = true;
+    }
+  }
+  if (schemasChanged) saveSchemas(schemas);
+  setState({
+    extraTypes: state.extraTypes.filter((path) => {
+      const otherKey = typeKey(path);
+      return otherKey !== key && !otherKey.startsWith(`${key}/`);
+    }),
+  });
   return true;
 }
 
