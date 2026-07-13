@@ -8,11 +8,21 @@ import { typeKey } from "@/lib/note-utils";
  * in `.grimoire/properties.json`.
  */
 
-export type PropertyType = "text" | "number" | "date" | "checkbox" | "list";
+export type PropertyType =
+  | "text"
+  | "number"
+  | "date"
+  | "checkbox"
+  | "list"
+  | "relation";
 
 export interface PropertyDef {
   name: string;
   type: PropertyType;
+  /** relation only: restrict linkable notes to this type (and its sub-types). Unset = any type. */
+  relationTypeKey?: string;
+  /** relation only: allow linking more than one note. */
+  relationMultiple?: boolean;
 }
 
 /** typeKey ("work/projects") -> property definitions for that type. */
@@ -24,6 +34,7 @@ export const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: "date", label: "Date" },
   { value: "checkbox", label: "Checkbox" },
   { value: "list", label: "List" },
+  { value: "relation", label: "Relation" },
 ];
 
 /** A property visible on a note, plus the type (schema key) that defines it. */

@@ -12,6 +12,7 @@ import {
   logicalPath,
   noteTitle,
   noteTypePath,
+  notesOfTypeKey,
   sanitizeFileStem,
   typeKey,
 } from "@/lib/note-utils";
@@ -366,13 +367,8 @@ function saveSchemas(schemas: PropertySchemas) {
     .catch((error) => reportError("save property definitions", error));
 }
 
-/** Non-trashed notes of the given type, including its sub-types. */
 function notesOfType(ownerKey: string): Note[] {
-  return state.notes.filter((note) => {
-    if (isTrashed(note)) return false;
-    const key = typeKey(noteTypePath(note));
-    return key === ownerKey || key.startsWith(`${ownerKey}/`);
-  });
+  return notesOfTypeKey(state.notes, ownerKey);
 }
 
 export function addTypeProperty(ownerKey: string, def: PropertyDef) {

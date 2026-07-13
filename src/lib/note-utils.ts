@@ -68,6 +68,15 @@ export function typeKey(typePath: string[]): string {
   return typePath.join("/");
 }
 
+/** Non-trashed notes of the given type, including its sub-types. */
+export function notesOfTypeKey(notes: Note[], ownerKey: string): Note[] {
+  return notes.filter((note) => {
+    if (isTrashed(note)) return false;
+    const key = typeKey(noteTypePath(note));
+    return key === ownerKey || key.startsWith(`${ownerKey}/`);
+  });
+}
+
 export function fileStem(path: string): string {
   const name = path.split("/").pop() ?? "";
   return name.replace(/\.md$/i, "");

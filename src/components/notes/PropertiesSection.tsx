@@ -3,14 +3,24 @@ import {
   Calendar,
   CheckSquare,
   Hash,
+  Link,
   List,
   Plus,
   SlidersHorizontal,
   Type as TypeIcon,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Popover,
   PopoverContent,
@@ -25,7 +35,16 @@ import {
   inferPropertyType,
   sanitizePropertyName,
 } from "@/lib/properties";
-import { type Note, noteTypePath, typeKey } from "@/lib/note-utils";
+import {
+  type Note,
+  findNoteByTitle,
+  getAllTypePaths,
+  isTrashed,
+  noteTitle,
+  noteTypePath,
+  notesOfTypeKey,
+  typeKey,
+} from "@/lib/note-utils";
 import {
   addTypeProperty,
   removeTypeProperty,
@@ -33,6 +52,7 @@ import {
   updateTypeProperty,
   useVault,
 } from "@/store/notes-store";
+import { cn } from "@/lib/utils";
 
 const TYPE_ICONS: Record<PropertyType, typeof TypeIcon> = {
   text: TypeIcon,
@@ -40,13 +60,17 @@ const TYPE_ICONS: Record<PropertyType, typeof TypeIcon> = {
   date: Calendar,
   checkbox: CheckSquare,
   list: List,
+  relation: Link,
 };
 
 // ---- value editors -----------------------------------------------------------
 
 interface ValueEditorProps {
-  type: PropertyType;
+  def: PropertyDef;
   value: PropertyValue | undefined;
+  allNotes: Note[];
+  currentNoteId: string;
+  onOpenNote: (id: string) => void;
   onCommit: (value: PropertyValue | null) => void;
 }
 
@@ -113,7 +137,177 @@ function ListValueEditor({
   );
 }
 
-function ValueEditor({ type, value, onCommit }: ValueEditorProps) {
+function RelationChip({
+  title,
+  note,
+  onOpenNote,
+  onRemove,
+}: {
+  title: string;
+  note: Note | undefined;
+  onOpenNote: (id: string) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs",
+        note
+          ? "border-[hsl(211_90%_40%/0.3)] text-[hsl(211_90%_40%)] hover:bg-[hsl(211_90%_40%/0.08)]"
+          : "border-dashed border-muted-foreground/40 text-muted-foreground",
+      )}
+    >
+      {note ? (
+        <button
+          type="button"
+          className="truncate"
+          title={`Open "${title}"`}
+          onClick={() => onOpenNote(note.id)}
+        >
+          {title}
+        </button>
+      ) : (
+        <span className="truncate italic" title="No note matches this title">
+          {title}
+        </span>
+      )}
+      <button
+        type="button"
+        className="shrink-0 opacity-60 hover:opacity-100"
+        title="Remove"
+        onClick={onRemove}
+      >
+        <X size={10} />
+      </button>
+    </span>
+  );
+}
+
+function RelationValueEditor({
+  def,
+  value,
+  allNotes,
+  currentNoteId,
+  onOpenNote,
+  onCommit,
+}: {
+  def: PropertyDef;
+  value: PropertyValue | undefined;
+  allNotes: Note[];
+  currentNoteId: string;
+  onOpenNote: (id: string) => void;
+  onCommit: (value: PropertyValue | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const titles = Array.isArray(value)
+    ? value
+    : value === undefined || value === null || value === ""
+      ? []
+      : [String(value)];
+  const selectedLower = new Set(titles.map((title) => title.toLowerCase()));
+
+  const candidates = (
+    def.relationTypeKey
+      ? notesOfTypeKey(allNotes, def.relationTypeKey)
+      : allNotes.filter((note) => !isTrashed(note))
+  ).filter(
+    (note) =>
+      note.id !== currentNoteId &&
+      !selectedLower.has(noteTitle(note).toLowerCase()),
+  );
+
+  const pick = (note: Note) => {
+    const title = noteTitle(note);
+    onCommit(def.relationMultiple ? [...titles, title] : title);
+    setQuery("");
+    setOpen(false);
+  };
+
+  const remove = (title: string) => {
+    const next = titles.filter((t) => t.toLowerCase() !== title.toLowerCase());
+    onCommit(next.length ? next : null);
+  };
+
+  const showAdd = def.relationMultiple || titles.length === 0;
+
+  return (
+    <div className="flex flex-wrap items-center gap-1 px-0.5 py-0.5">
+      {titles.map((title) => (
+        <RelationChip
+          key={title}
+          title={title}
+          note={findNoteByTitle(title, allNotes)}
+          onOpenNote={onOpenNote}
+          onRemove={() => remove(title)}
+        />
+      ))}
+      {showAdd && (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex h-5 items-center gap-0.5 rounded-full px-1.5 text-[11px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <Plus size={10} />
+              Link
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-64 p-0" align="start">
+            <Command>
+              <CommandInput
+                placeholder={
+                  def.relationTypeKey
+                    ? `Search "${def.relationTypeKey}"…`
+                    : "Search notes…"
+                }
+                value={query}
+                onValueChange={setQuery}
+              />
+              <CommandList>
+                <CommandEmpty>No matching notes.</CommandEmpty>
+                <CommandGroup>
+                  {candidates.slice(0, 100).map((note) => (
+                    <CommandItem
+                      key={note.id}
+                      value={noteTitle(note)}
+                      onSelect={() => pick(note)}
+                    >
+                      {noteTitle(note)}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+function ValueEditor({
+  def,
+  value,
+  allNotes,
+  currentNoteId,
+  onOpenNote,
+  onCommit,
+}: ValueEditorProps) {
+  const type = def.type;
+  if (type === "relation") {
+    return (
+      <RelationValueEditor
+        def={def}
+        value={value}
+        allNotes={allNotes}
+        currentNoteId={currentNoteId}
+        onOpenNote={onOpenNote}
+        onCommit={onCommit}
+      />
+    );
+  }
   if (type === "checkbox") {
     return (
       <Checkbox
@@ -168,13 +362,26 @@ function ValueEditor({ type, value, onCommit }: ValueEditorProps) {
 interface DefFormProps {
   initial?: PropertyDef;
   submitLabel: string;
+  existingTypePaths: string[][];
   onSubmit: (def: PropertyDef) => void;
   onDelete?: () => void;
 }
 
-function DefForm({ initial, submitLabel, onSubmit, onDelete }: DefFormProps) {
+function DefForm({
+  initial,
+  submitLabel,
+  existingTypePaths,
+  onSubmit,
+  onDelete,
+}: DefFormProps) {
   const [name, setName] = useState(initial?.name ?? "");
   const [type, setType] = useState<PropertyType>(initial?.type ?? "text");
+  const [relationTypeKey, setRelationTypeKey] = useState(
+    initial?.relationTypeKey ?? "",
+  );
+  const [relationMultiple, setRelationMultiple] = useState(
+    initial?.relationMultiple ?? false,
+  );
   const clean = sanitizePropertyName(name);
 
   return (
@@ -182,7 +389,17 @@ function DefForm({ initial, submitLabel, onSubmit, onDelete }: DefFormProps) {
       className="space-y-2"
       onSubmit={(e) => {
         e.preventDefault();
-        if (clean) onSubmit({ name: clean, type });
+        if (!clean) return;
+        onSubmit(
+          type === "relation"
+            ? {
+                name: clean,
+                type,
+                relationTypeKey: relationTypeKey || undefined,
+                relationMultiple,
+              }
+            : { name: clean, type },
+        );
       }}
     >
       <Input
@@ -203,6 +420,35 @@ function DefForm({ initial, submitLabel, onSubmit, onDelete }: DefFormProps) {
           </option>
         ))}
       </select>
+      {type === "relation" && (
+        <>
+          <select
+            value={relationTypeKey}
+            onChange={(e) => setRelationTypeKey(e.target.value)}
+            className="h-7 w-full rounded-md border border-input bg-white px-2 text-xs"
+          >
+            <option value="">Any type</option>
+            {existingTypePaths.map((path) => {
+              const key = typeKey(path);
+              return (
+                <option key={key} value={key}>
+                  {"  ".repeat(path.length - 1)}
+                  {path[path.length - 1]}
+                </option>
+              );
+            })}
+          </select>
+          <label className="flex items-center gap-1.5 px-0.5 text-xs text-muted-foreground">
+            <Checkbox
+              checked={relationMultiple}
+              onCheckedChange={(checked) =>
+                setRelationMultiple(checked === true)
+              }
+            />
+            Allow multiple notes
+          </label>
+        </>
+      )}
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" className="h-7 text-xs" disabled={!clean}>
           {submitLabel}
@@ -227,12 +473,19 @@ function DefForm({ initial, submitLabel, onSubmit, onDelete }: DefFormProps) {
 
 interface PropertiesSectionProps {
   note: Note;
+  allNotes: Note[];
+  onOpenNote: (id: string) => void;
   expanded?: boolean;
 }
 
-export function PropertiesSection({ note, expanded }: PropertiesSectionProps) {
+export function PropertiesSection({
+  note,
+  allNotes,
+  onOpenNote,
+  expanded,
+}: PropertiesSectionProps) {
   const nameColumnClass = expanded ? "w-48" : "w-28";
-  const { schemas } = useVault();
+  const { schemas, extraTypes } = useVault();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
 
@@ -240,6 +493,7 @@ export function PropertiesSection({ note, expanded }: PropertiesSectionProps) {
   const ownKey = typeKey(typePath);
   const effective = effectiveProperties(typePath, schemas);
   const values = getNoteProperties(note.content);
+  const existingTypePaths = getAllTypePaths(allNotes, extraTypes);
 
   // frontmatter keys not covered by the type's definitions (ad-hoc properties)
   const covered = new Set(effective.map(({ def }) => def.name.toLowerCase()));
@@ -302,6 +556,7 @@ export function PropertiesSection({ note, expanded }: PropertiesSectionProps) {
                   <DefForm
                     initial={def}
                     submitLabel="Save"
+                    existingTypePaths={existingTypePaths}
                     onSubmit={(next) => {
                       updateTypeProperty(ownerKey, def.name, next);
                       setEditing(null);
@@ -315,8 +570,11 @@ export function PropertiesSection({ note, expanded }: PropertiesSectionProps) {
               </Popover>
               <div className="min-w-0 flex-1">
                 <ValueEditor
-                  type={def.type}
+                  def={def}
                   value={valueFor(def.name)}
+                  allNotes={allNotes}
+                  currentNoteId={note.id}
+                  onOpenNote={onOpenNote}
                   onCommit={(value) => setNoteProperty(note.id, def.name, value)}
                 />
               </div>
@@ -374,8 +632,11 @@ export function PropertiesSection({ note, expanded }: PropertiesSectionProps) {
               </Popover>
               <div className="min-w-0 flex-1">
                 <ValueEditor
-                  type={inferredType}
+                  def={{ name: key, type: inferredType }}
                   value={value}
+                  allNotes={allNotes}
+                  currentNoteId={note.id}
+                  onOpenNote={onOpenNote}
                   onCommit={(next) => setNoteProperty(note.id, key, next)}
                 />
               </div>
@@ -400,6 +661,7 @@ export function PropertiesSection({ note, expanded }: PropertiesSectionProps) {
             </p>
             <DefForm
               submitLabel="Add"
+              existingTypePaths={existingTypePaths}
               onSubmit={(def) => {
                 addTypeProperty(ownKey, def);
                 setAddOpen(false);
