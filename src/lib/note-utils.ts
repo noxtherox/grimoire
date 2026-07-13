@@ -125,33 +125,6 @@ export function findNoteByTitle(
   );
 }
 
-/**
- * Notes that link to `target`, grouped by each linking note's type path —
- * the type is what organizes the backlinks section.
- */
-export function getBacklinksGroupedByType(
-  target: Note,
-  notes: Note[],
-): Map<string, Note[]> {
-  const targetTitle = noteTitle(target).toLowerCase();
-  const groups = new Map<string, Note[]>();
-  for (const note of notes) {
-    if (isTrashed(note) || note.id === target.id) continue;
-    const linksToTarget = getOutgoingLinkTitles(note.content).some(
-      (title) => title.toLowerCase() === targetTitle,
-    );
-    if (!linksToTarget) continue;
-    const key = typeKey(noteTypePath(note));
-    const group = groups.get(key) ?? [];
-    group.push(note);
-    groups.set(key, group);
-  }
-  for (const group of groups.values()) {
-    group.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }
-  return new Map([...groups.entries()].sort(([a], [b]) => a.localeCompare(b)));
-}
-
 export interface TypeNode {
   name: string;
   path: string[];

@@ -4,16 +4,17 @@ import { Button } from "@/components/ui/button";
 import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
 import { TypePicker } from "./TypePicker";
 import { BacklinksPanel } from "./BacklinksPanel";
+import { getBacklinksGroupedByType } from "@/lib/links";
 import {
   type Note,
   findNoteByTitle,
   getAllTypePaths,
-  getBacklinksGroupedByType,
   isTrashed,
   noteTitle,
   noteTypePath,
 } from "@/lib/note-utils";
 import { noteBody } from "@/lib/frontmatter";
+import type { PropertySchemas } from "@/lib/properties";
 import {
   createNote,
   getNotes,
@@ -30,6 +31,7 @@ interface EditorPaneProps {
   allNotes: Note[];
   /** Types that exist without notes — offered by the type picker too. */
   extraTypes: string[][];
+  schemas: PropertySchemas;
   onOpenNote: (id: string) => void;
 }
 
@@ -37,6 +39,7 @@ export function EditorPane({
   note,
   allNotes,
   extraTypes,
+  schemas,
   onOpenNote,
 }: EditorPaneProps) {
   const [showBacklinks, setShowBacklinks] = useState(false);
@@ -54,7 +57,7 @@ export function EditorPane({
   }
 
   const backlinkCount = [
-    ...getBacklinksGroupedByType(note, allNotes).values(),
+    ...getBacklinksGroupedByType(note, allNotes, schemas).values(),
   ].reduce((sum, group) => sum + group.length, 0);
 
   const handleFollowLink = async (title: string) => {
@@ -152,6 +155,7 @@ export function EditorPane({
           <BacklinksPanel
             note={note}
             allNotes={allNotes}
+            schemas={schemas}
             onOpenNote={onOpenNote}
             expanded={expandBacklinks}
             onToggleExpanded={() => setExpandBacklinks((open) => !open)}
