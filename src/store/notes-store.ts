@@ -7,6 +7,7 @@ import {
   TRASH_DIR,
   type Note,
   fileStem,
+  getAllTypePaths,
   isRemoteUrl,
   isTrashed,
   logicalPath,
@@ -491,6 +492,79 @@ export async function deleteType(typePath: string[]): Promise<boolean> {
       return otherKey !== key && !otherKey.startsWith(`${key}/`);
     }),
   });
+  return true;
+}
+
+/**
+ * Renames (and/or moves) a type: renames its folder on disk, then updates
+ * every note path, sub-type, property schema, and relation reference under
+ * the old key so nothing is left pointing at the stale path.
+ */
+export async function renameType(
+  oldPath: string[],
+  newPath: string[],
+): Promise<boolean> {
+  if (!backend || !oldPath.length || !newPath.length) return false;
+  const oldKey = typeKey(oldPath);
+  const newKey = typeKey(newPath);
+  if (oldKey === newKey) return true;
+  const collides = getAllTypePaths(state.notes, state.extraTypes).some(
+    (path) => typeKey(path) === newKey,
+  );
+  if (collides) {
+    reportError("rename type", `a type named "${newKey}" already exists`);
+    return false;
+  }
+  await flushAll();
+  try {
+    await backend.renameDir(oldKey, newKey);
+  } catch (error) {
+    reportError("rename type", error);
+    return false;
+  }
+
+  const oldPrefix = `${oldKey}/`;
+  const newPrefix = `${newKey}/`;
+  const remapKey = (key: string): string =>
+    key === oldKey ? newKey : newPrefix + key.slice(oldPrefix.length);
+
+  const notes = state.notes.map((note) =>
+    note.path.startsWith(oldPrefix)
+      ? { ...note, path: newPrefix + note.path.slice(oldPrefix.length) }
+      : note,
+  );
+
+  const extraTypes = state.extraTypes.map((path) => {
+    const key = typeKey(path);
+    if (key !== oldKey && !key.startsWith(oldPrefix)) return path;
+    return remapKey(key).split("/");
+  });
+
+  const schemas: PropertySchemas = {};
+  let schemasChanged = false;
+  for (const [key, defs] of Object.entries(state.schemas)) {
+    const migrated = defs.map((def) => {
+      if (
+        !def.relationTypeKey ||
+        (def.relationTypeKey !== oldKey &&
+          !def.relationTypeKey.startsWith(oldPrefix))
+      ) {
+        return def;
+      }
+      schemasChanged = true;
+      return { ...def, relationTypeKey: remapKey(def.relationTypeKey) };
+    });
+    if (key === oldKey || key.startsWith(oldPrefix)) {
+      schemas[remapKey(key)] = migrated;
+      schemasChanged = true;
+    } else {
+      schemas[key] = migrated;
+    }
+  }
+
+  setState({ notes, extraTypes });
+  savePinnedPaths();
+  if (schemasChanged) saveSchemas(schemas);
   return true;
 }
 

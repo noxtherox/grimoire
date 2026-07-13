@@ -102,6 +102,11 @@ export class DesktopVault implements VaultBackend {
     await remove(absPath, { recursive: true });
   }
 
+  async renameDir(from: string, to: string): Promise<void> {
+    await this.ensureParentDir(to);
+    await rename(this.abs(from), this.abs(to));
+  }
+
   async listDirs(): Promise<string[]> {
     const dirs: string[] = [];
     const walk = async (relDir: string, depth: number): Promise<void> => {

@@ -214,6 +214,31 @@ export class BrowserVault implements VaultBackend {
     this.persist();
   }
 
+  async renameDir(from: string, to: string): Promise<void> {
+    const remapPath = (path: string): string =>
+      path === from ? to : `${to}/${path.slice(from.length + 1)}`;
+    const prefix = `${from}/`;
+
+    this.dirs = this.dirs.map((dir) =>
+      dir === from || dir.startsWith(prefix) ? remapPath(dir) : dir,
+    );
+    this.persistDirs();
+
+    for (const [path, file] of Object.entries(this.files)) {
+      if (path !== from && !path.startsWith(prefix)) continue;
+      delete this.files[path];
+      this.files[remapPath(path)] = file;
+    }
+    this.persist();
+
+    for (const [path, data] of Object.entries(this.assets)) {
+      if (path !== from && !path.startsWith(prefix)) continue;
+      delete this.assets[path];
+      this.assets[remapPath(path)] = data;
+    }
+    this.persistAssets();
+  }
+
   async listDirs(): Promise<string[]> {
     return [...this.dirs];
   }

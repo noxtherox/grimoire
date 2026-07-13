@@ -20,6 +20,8 @@ export interface VaultBackend {
   mkDir(path: string): Promise<void>;
   /** Removes a folder and everything still inside it (deleting a type). */
   removeDir(path: string): Promise<void>;
+  /** Renames/moves a folder and everything inside it (editing a type). */
+  renameDir(from: string, to: string): Promise<void>;
   /** All note folders (vault-relative), including ones with no notes. */
   listDirs(): Promise<string[]>;
   /** Binary asset support (pasted images etc.). */

@@ -5,6 +5,7 @@ import {
   Folder,
   FolderOpen,
   Notebook,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
@@ -24,6 +25,7 @@ import {
   createType,
   deleteType,
   reloadVault,
+  renameType,
 } from "@/store/notes-store";
 import {
   ContextMenu,
@@ -41,7 +43,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { buttonVariants } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface SidebarProps {
   notes: Note[];
@@ -122,6 +132,7 @@ function TypeTreeRows({
   expanded,
   onFilterChange,
   onToggle,
+  onRenameType,
   onDeleteType,
 }: {
   nodes: TypeNode[];
@@ -130,6 +141,7 @@ function TypeTreeRows({
   expanded: Set<string>;
   onFilterChange: (filter: NoteFilter) => void;
   onToggle: (key: string) => void;
+  onRenameType: (node: TypeNode) => void;
   onDeleteType: (node: TypeNode) => void;
 }) {
   return (
@@ -171,6 +183,9 @@ function TypeTreeRows({
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>
+                <ContextMenuItem onClick={() => onRenameType(node)}>
+                  <Pencil size={14} className="mr-2" /> Rename type
+                </ContextMenuItem>
                 <ContextMenuItem
                   className="text-destructive"
                   onClick={() => onDeleteType(node)}
@@ -187,6 +202,7 @@ function TypeTreeRows({
                 expanded={expanded}
                 onFilterChange={onFilterChange}
                 onToggle={onToggle}
+                onRenameType={onRenameType}
                 onDeleteType={onDeleteType}
               />
             )}
@@ -218,6 +234,36 @@ export function Sidebar({
     if (!path.length) return;
     const created = await createType(path);
     if (created) onFilterChange({ kind: "type", path });
+  };
+
+  // Type pending a rename, or null when no dialog is open
+  const [renameTarget, setRenameTarget] = useState<TypeNode | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  const startRename = (node: TypeNode) => {
+    setRenameTarget(node);
+    setRenameDraft(typeKey(node.path));
+  };
+
+  const submitRename = async () => {
+    if (!renameTarget) return;
+    const oldPath = renameTarget.path;
+    const newPath = parseTypePath(renameDraft);
+    if (!newPath.length || typeKey(newPath) === typeKey(oldPath)) {
+      setRenameTarget(null);
+      return;
+    }
+    const renamed = await renameType(oldPath, newPath);
+    if (!renamed) return;
+    setRenameTarget(null);
+    const oldKey = typeKey(oldPath);
+    const activeKey = filter.kind === "type" ? typeKey(filter.path) : null;
+    if (activeKey && (activeKey === oldKey || activeKey.startsWith(`${oldKey}/`))) {
+      onFilterChange({
+        kind: "type",
+        path: [...newPath, ...filter.path.slice(oldPath.length)],
+      });
+    }
   };
 
   // Type pending a delete confirmation, or null when no dialog is open
@@ -320,6 +366,7 @@ export function Sidebar({
           expanded={expanded}
           onFilterChange={onFilterChange}
           onToggle={toggle}
+          onRenameType={startRename}
           onDeleteType={setDeleteTarget}
         />
       </nav>
@@ -341,6 +388,41 @@ export function Sidebar({
           </button>
         )}
       </div>
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename type "{renameTarget?.name}"</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitRename();
+            }}
+          >
+            <Input
+              autoFocus
+              value={renameDraft}
+              onChange={(event) => setRenameDraft(event.target.value)}
+              placeholder="type (e.g. work/projects)"
+            />
+            <DialogFooter className="mt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setRenameTarget(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit">Rename</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       <AlertDialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
