@@ -286,11 +286,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 
 const livePreviewTheme = EditorView.theme({
   ".cm-blockquote-line": {
-    borderLeft: "3px solid hsl(215 16% 80%)",
+    borderLeft: "3px solid rgb(var(--grim-text) / 0.22)",
     paddingLeft: "12px",
   },
   ".cm-codeblock-line": {
-    backgroundColor: "hsl(214 32% 96%)",
+    backgroundColor: "rgb(var(--grim-text) / 0.05)",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: "0.9em",
     padding: "0 10px",
@@ -303,7 +303,7 @@ const livePreviewTheme = EditorView.theme({
     display: "inline-block",
     width: "100%",
     verticalAlign: "middle",
-    borderTop: "1px solid hsl(215 16% 82%)",
+    borderTop: "1px solid rgb(var(--grim-text) / 0.2)",
   },
   ".cm-task-checkbox": {
     accentColor: ACCENT,

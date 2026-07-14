@@ -69,8 +69,8 @@ export const editorTheme = EditorView.theme({
   ".cm-image-preview-missing": {
     padding: "6px 10px",
     fontSize: "12px",
-    color: "hsl(215 16% 47%)",
-    backgroundColor: "hsl(214 32% 95%)",
+    color: "rgb(var(--grim-text) / 0.6)",
+    backgroundColor: "rgb(var(--grim-text) / 0.06)",
   },
   ".cm-image-resize-handle": {
     position: "absolute",
@@ -81,8 +81,8 @@ export const editorTheme = EditorView.theme({
     height: "44px",
     maxHeight: "60%",
     borderRadius: "9999px",
-    backgroundColor: "hsl(215 16% 47% / 0.55)",
-    border: "1.5px solid white",
+    backgroundColor: "rgb(var(--grim-text) / 0.4)",
+    border: "1.5px solid rgb(var(--grim-editor-bg))",
     cursor: "ew-resize",
     opacity: "0",
     transition: "opacity 120ms ease",
@@ -91,7 +91,7 @@ export const editorTheme = EditorView.theme({
   ".cm-image-preview:hover .cm-image-resize-handle": { opacity: "1" },
   ".cm-image-resizing .cm-image-resize-handle": { opacity: "1" },
   ".cm-tooltip.cm-tooltip-autocomplete": {
-    border: "1px solid hsl(214 32% 91%)",
+    border: "1px solid rgb(var(--grim-text) / 0.12)",
     borderRadius: "8px",
     backgroundColor: "rgb(var(--grim-editor-bg))",
     boxShadow: "0 8px 24px rgb(0 0 0 / 0.12)",
@@ -115,11 +115,11 @@ export const markdownHighlighting = syntaxHighlighting(
     { tag: tags.strikethrough, textDecoration: "line-through" },
     { tag: tags.link, color: LINK },
     { tag: tags.url, color: LINK },
-    { tag: tags.quote, color: "hsl(215 16% 47%)", fontStyle: "italic" },
+    { tag: tags.quote, color: "rgb(var(--grim-text) / 0.62)", fontStyle: "italic" },
     { tag: tags.monospace, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "0.9em", color: ACCENT },
-    { tag: tags.processingInstruction, color: "hsl(215 16% 65%)" },
-    { tag: tags.meta, color: "hsl(215 16% 65%)" },
-    { tag: tags.contentSeparator, color: "hsl(215 16% 65%)" },
+    { tag: tags.processingInstruction, color: "rgb(var(--grim-text) / 0.45)" },
+    { tag: tags.meta, color: "rgb(var(--grim-text) / 0.45)" },
+    { tag: tags.contentSeparator, color: "rgb(var(--grim-text) / 0.45)" },
   ]),
 );
 
