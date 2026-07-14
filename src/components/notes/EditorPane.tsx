@@ -15,6 +15,7 @@ import {
 } from "@/lib/note-utils";
 import { noteBody } from "@/lib/frontmatter";
 import type { PropertySchemas } from "@/lib/properties";
+import type { TypeIcons } from "@/lib/type-icons";
 import {
   createNote,
   getNotes,
@@ -32,6 +33,8 @@ interface EditorPaneProps {
   /** Types that exist without notes — offered by the type picker too. */
   extraTypes: string[][];
   schemas: PropertySchemas;
+  /** Custom icon per type key, shown in the type picker. */
+  typeIcons: TypeIcons;
   onOpenNote: (id: string) => void;
 }
 
@@ -40,6 +43,7 @@ export function EditorPane({
   allNotes,
   extraTypes,
   schemas,
+  typeIcons,
   onOpenNote,
 }: EditorPaneProps) {
   const [showBacklinks, setShowBacklinks] = useState(false);
@@ -77,6 +81,7 @@ export function EditorPane({
         <TypePicker
           value={noteTypePath(note)}
           existingTypePaths={getAllTypePaths(allNotes, extraTypes)}
+          typeIcons={typeIcons}
           onChange={(typePath) => void setNoteType(note.id, typePath)}
         />
         <div className="flex-1" />

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, Folder, Plus } from "lucide-react";
+import { Check, ChevronDown, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -16,16 +16,21 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { parseTypePath, typeKey } from "@/lib/note-utils";
+import type { TypeIcons } from "@/lib/type-icons";
+import { TypeIcon } from "./TypeIcon";
 
 interface TypePickerProps {
   value: string[];
   existingTypePaths: string[][];
+  /** Custom icon per type key — types without one get the folder glyph. */
+  typeIcons: TypeIcons;
   onChange: (typePath: string[]) => void;
 }
 
 export function TypePicker({
   value,
   existingTypePaths,
+  typeIcons,
   onChange,
 }: TypePickerProps) {
   const [open, setOpen] = useState(false);
@@ -52,7 +57,7 @@ export function TypePicker({
           className="h-7 gap-1 rounded-full border-grim-accent/35 bg-grim-accent/5 px-2.5 text-xs font-medium text-grim-accent hover:bg-grim-accent/10 hover:text-grim-accent"
           title="Type — the folder this note lives in (type / sub-type / sub-sub-type)"
         >
-          <Folder size={12} />
+          <TypeIcon icon={typeIcons[typeKey(value)]} size={12} />
           {value.length ? value.join(" / ") : "unfiled"}
           <ChevronDown size={12} className="opacity-60" />
         </Button>
@@ -71,7 +76,8 @@ export function TypePicker({
                 const key = typeKey(path);
                 return (
                   <CommandItem key={key} value={key} onSelect={() => pick(path)}>
-                    <Folder
+                    <TypeIcon
+                      icon={typeIcons[key]}
                       size={13}
                       className="mr-2 shrink-0 opacity-60"
                       style={{ marginLeft: `${(path.length - 1) * 12}px` }}

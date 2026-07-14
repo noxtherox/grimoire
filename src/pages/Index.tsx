@@ -114,6 +114,7 @@ const Index = () => {
           <Sidebar
             notes={notes}
             extraTypes={vault.extraTypes}
+            typeIcons={vault.typeIcons}
             filter={filter}
             isDesktop={vault.isDesktop}
             vaultLocation={vault.location}
@@ -139,6 +140,7 @@ const Index = () => {
             allNotes={notes}
             extraTypes={vault.extraTypes}
             schemas={vault.schemas}
+            typeIcons={vault.typeIcons}
             onOpenNote={handleOpenNote}
           />
         </ResizablePanel>

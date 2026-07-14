@@ -28,6 +28,7 @@ import {
   type PropertySchemas,
   hoistSchemasToTopLevel,
 } from "@/lib/properties";
+import { type TypeIcons, suggestIconForType } from "@/lib/type-icons";
 import type { VaultBackend } from "@/lib/vault/backend";
 import { BrowserVault } from "@/lib/vault/browser";
 import { DesktopVault } from "@/lib/vault/desktop";
@@ -46,6 +47,8 @@ export interface VaultState {
   extraTypes: string[][];
   /** Property definitions, keyed by top-level type key ("work"). */
   schemas: PropertySchemas;
+  /** Custom lucide icon per type, keyed by full type key ("work/projects"). */
+  typeIcons: TypeIcons;
   error: string | null;
 }
 
@@ -56,6 +59,7 @@ let state: VaultState = {
   notes: [],
   extraTypes: [],
   schemas: {},
+  typeIcons: {},
   error: null,
 };
 
@@ -134,6 +138,19 @@ async function loadSchemas(fromBackend: VaultBackend): Promise<PropertySchemas> 
   }
 }
 
+const TYPE_ICONS_PATH = ".grimoire/type-icons.json";
+
+async function loadTypeIcons(fromBackend: VaultBackend): Promise<TypeIcons> {
+  try {
+    const raw = await fromBackend.readText(TYPE_ICONS_PATH);
+    const parsed = JSON.parse(raw) as TypeIcons;
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {}; // missing or unreadable — start empty
+  }
+}
+
 async function loadVault(nextBackend: VaultBackend) {
   backend = nextBackend;
   clearImageUrlCache();
@@ -144,13 +161,15 @@ async function loadVault(nextBackend: VaultBackend) {
     notes: [],
     extraTypes: [],
     schemas: {},
+    typeIcons: {},
     error: null,
   });
   try {
-    const [files, schemas, dirs] = await Promise.all([
+    const [files, schemas, dirs, typeIcons] = await Promise.all([
       nextBackend.loadAll(),
       loadSchemas(nextBackend),
       nextBackend.listDirs(),
+      loadTypeIcons(nextBackend),
     ]);
     const pinned = loadPinnedPaths();
     const notes: Note[] = files.map((file) => ({
@@ -164,7 +183,7 @@ async function loadVault(nextBackend: VaultBackend) {
     const extraTypes = dirs
       .filter((dir) => dir !== IMAGE_DIR && !dir.startsWith(`${IMAGE_DIR}/`))
       .map((dir) => dir.split("/").slice(0, MAX_TYPE_DEPTH));
-    setState({ status: "ready", notes, extraTypes, schemas });
+    setState({ status: "ready", notes, extraTypes, schemas, typeIcons });
   } catch (error) {
     setState({ status: "error", error: String(error) });
   }
@@ -458,6 +477,53 @@ export function updateNoteBody(id: string, body: string) {
   if (next !== note.content) updateNoteContent(id, next);
 }
 
+// ---- type icons ---------------------------------------------------------------
+
+function saveTypeIcons(typeIcons: TypeIcons) {
+  setState({ typeIcons });
+  if (!backend) return;
+  backend
+    .write(TYPE_ICONS_PATH, JSON.stringify(typeIcons, null, 2))
+    .catch((error) => reportError("save type icons", error));
+}
+
+/** Sets (or with `null`, resets to the default folder) a type's icon. */
+export function setTypeIcon(typePath: string[], icon: string | null) {
+  const key = typeKey(typePath);
+  if (!key) return;
+  const typeIcons = { ...state.typeIcons };
+  if (icon) typeIcons[key] = icon;
+  else delete typeIcons[key];
+  saveTypeIcons(typeIcons);
+}
+
+/**
+ * Guesses icons for type levels that didn't exist before (e.g. creating
+ * "work/recipes" suggests for both "work" and "work/recipes" if both are new).
+ * Never touches types that already existed or already have an icon.
+ */
+function suggestIconsForNewType(typePath: string[], existedKeys: Set<string>) {
+  const typeIcons = { ...state.typeIcons };
+  let changed = false;
+  for (let depth = 1; depth <= typePath.length; depth++) {
+    const key = typeKey(typePath.slice(0, depth));
+    if (existedKeys.has(key) || typeIcons[key]) continue;
+    const suggested = suggestIconForType(typePath[depth - 1]);
+    if (!suggested) continue;
+    typeIcons[key] = suggested;
+    changed = true;
+  }
+  if (changed) saveTypeIcons(typeIcons);
+}
+
+function existingTypeKeys(): Set<string> {
+  return new Set(
+    getAllTypePaths(state.notes, state.extraTypes).map((path) =>
+      typeKey(path),
+    ),
+  );
+}
+
 // ---- type operations ---------------------------------------------------------
 
 /**
@@ -467,6 +533,7 @@ export function updateNoteBody(id: string, body: string) {
 export async function createType(typePath: string[]): Promise<boolean> {
   if (!backend || !typePath.length) return false;
   const key = typeKey(typePath);
+  const existedKeys = existingTypeKeys();
   try {
     await backend.mkDir(key);
   } catch (error) {
@@ -476,6 +543,7 @@ export async function createType(typePath: string[]): Promise<boolean> {
   if (!state.extraTypes.some((path) => typeKey(path) === key)) {
     setState({ extraTypes: [...state.extraTypes, typePath] });
   }
+  suggestIconsForNewType(typePath, existedKeys);
   return true;
 }
 
@@ -505,6 +573,15 @@ export async function deleteType(typePath: string[]): Promise<boolean> {
     }
   }
   if (schemasChanged) saveSchemas(schemas);
+  const typeIcons = { ...state.typeIcons };
+  let iconsChanged = false;
+  for (const iconKey of Object.keys(typeIcons)) {
+    if (iconKey === key || iconKey.startsWith(`${key}/`)) {
+      delete typeIcons[iconKey];
+      iconsChanged = true;
+    }
+  }
+  if (iconsChanged) saveTypeIcons(typeIcons);
   setState({
     extraTypes: state.extraTypes.filter((path) => {
       const otherKey = typeKey(path);
@@ -581,9 +658,21 @@ export async function renameType(
     }
   }
 
+  const typeIcons: TypeIcons = {};
+  let iconsChanged = false;
+  for (const [key, icon] of Object.entries(state.typeIcons)) {
+    if (key === oldKey || key.startsWith(oldPrefix)) {
+      typeIcons[remapKey(key)] = icon;
+      iconsChanged = true;
+    } else {
+      typeIcons[key] = icon;
+    }
+  }
+
   setState({ notes, extraTypes });
   savePinnedPaths();
   if (schemasChanged) saveSchemas(schemas);
+  if (iconsChanged) saveTypeIcons(typeIcons);
   return true;
 }
 
@@ -621,11 +710,15 @@ export async function setNoteType(id: string, typePath: string[]) {
   const note = state.notes.find((candidate) => candidate.id === id);
   if (!note || isTrashed(note) || !typePath.length) return;
   if (typeKey(noteTypePath(note)) === typeKey(typePath)) return;
+  // the move may create the type — capture what existed before to only
+  // suggest icons for genuinely new type levels
+  const existedKeys = existingTypeKeys();
   const target = uniquePath(typeKey(typePath), fileStem(note.path), id);
   try {
     await backend.move(note.path, target);
     updateNote(id, { path: target });
     savePinnedPaths();
+    suggestIconsForNewType(typePath, existedKeys);
   } catch (error) {
     reportError("move note", error);
   }

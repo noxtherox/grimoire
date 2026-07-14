@@ -2,13 +2,12 @@ import { useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  Folder,
-  FolderOpen,
   Notebook,
   Pencil,
   Plus,
   RefreshCw,
   Settings,
+  Smile,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -21,12 +20,14 @@ import {
   typeKey,
 } from "@/lib/note-utils";
 import type { NoteFilter } from "@/lib/filters";
+import type { TypeIcons } from "@/lib/type-icons";
 import {
   chooseVaultFolder,
   createType,
   deleteType,
   reloadVault,
   renameType,
+  setTypeIcon,
 } from "@/store/notes-store";
 import {
   ContextMenu,
@@ -54,11 +55,15 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeSettingsDialog } from "./ThemeSettingsDialog";
+import { TypeIcon } from "./TypeIcon";
+import { IconPickerDialog } from "./IconPickerDialog";
 
 interface SidebarProps {
   notes: Note[];
   /** Types that exist without notes (empty folders) — shown with count 0. */
   extraTypes: string[][];
+  /** Custom icon per type key — types without one get the folder glyph. */
+  typeIcons: TypeIcons;
   filter: NoteFilter;
   isDesktop: boolean;
   vaultLocation: string | null;
@@ -134,19 +139,23 @@ function TypeTreeRows({
   depth,
   filter,
   expanded,
+  typeIcons,
   onFilterChange,
   onToggle,
   onRenameType,
   onDeleteType,
+  onChangeIcon,
 }: {
   nodes: TypeNode[];
   depth: number;
   filter: NoteFilter;
   expanded: Set<string>;
+  typeIcons: TypeIcons;
   onFilterChange: (filter: NoteFilter) => void;
   onToggle: (key: string) => void;
   onRenameType: (node: TypeNode) => void;
   onDeleteType: (node: TypeNode) => void;
+  onChangeIcon: (node: TypeNode) => void;
 }) {
   return (
     <>
@@ -166,11 +175,11 @@ function TypeTreeRows({
                       onFilterChange({ kind: "type", path: node.path })
                     }
                     icon={
-                      isOpen && node.children.length ? (
-                        <FolderOpen size={15} />
-                      ) : (
-                        <Folder size={15} />
-                      )
+                      <TypeIcon
+                        icon={typeIcons[key]}
+                        open={isOpen && node.children.length > 0}
+                        size={15}
+                      />
                     }
                     label={node.name}
                     count={node.count}
@@ -187,6 +196,9 @@ function TypeTreeRows({
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>
+                <ContextMenuItem onClick={() => onChangeIcon(node)}>
+                  <Smile size={14} className="mr-2" /> Change icon
+                </ContextMenuItem>
                 <ContextMenuItem onClick={() => onRenameType(node)}>
                   <Pencil size={14} className="mr-2" /> Rename type
                 </ContextMenuItem>
@@ -204,10 +216,12 @@ function TypeTreeRows({
                 depth={depth + 1}
                 filter={filter}
                 expanded={expanded}
+                typeIcons={typeIcons}
                 onFilterChange={onFilterChange}
                 onToggle={onToggle}
                 onRenameType={onRenameType}
                 onDeleteType={onDeleteType}
+                onChangeIcon={onChangeIcon}
               />
             )}
           </div>
@@ -220,6 +234,7 @@ function TypeTreeRows({
 export function Sidebar({
   notes,
   extraTypes,
+  typeIcons,
   filter,
   isDesktop,
   vaultLocation,
@@ -271,6 +286,9 @@ export function Sidebar({
       }
     }
   };
+
+  // Type whose icon is being edited, or null when the picker is closed
+  const [iconTarget, setIconTarget] = useState<TypeNode | null>(null);
 
   // Type pending a delete confirmation, or null when no dialog is open
   const [deleteTarget, setDeleteTarget] = useState<TypeNode | null>(null);
@@ -372,10 +390,12 @@ export function Sidebar({
           depth={0}
           filter={filter}
           expanded={expanded}
+          typeIcons={typeIcons}
           onFilterChange={onFilterChange}
           onToggle={toggle}
           onRenameType={startRename}
           onDeleteType={setDeleteTarget}
+          onChangeIcon={setIconTarget}
         />
       </nav>
       <div className="space-y-0.5 border-t border-grim-sidebar-fg/10 p-2">
@@ -403,6 +423,17 @@ export function Sidebar({
         )}
       </div>
       <ThemeSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <IconPickerDialog
+        open={iconTarget !== null}
+        typeName={iconTarget?.name ?? ""}
+        value={iconTarget ? typeIcons[typeKey(iconTarget.path)] : undefined}
+        onOpenChange={(open) => {
+          if (!open) setIconTarget(null);
+        }}
+        onPick={(icon) => {
+          if (iconTarget) setTypeIcon(iconTarget.path, icon);
+        }}
+      />
       <Dialog
         open={renameTarget !== null}
         onOpenChange={(open) => {
