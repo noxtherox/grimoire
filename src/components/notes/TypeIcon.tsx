@@ -1,9 +1,9 @@
 import { Folder, FolderOpen } from "lucide-react";
-import { getIconComponent } from "@/lib/type-icons";
+import { isEmojiValue } from "@/lib/type-icons";
 
 /**
- * The icon for a type: its custom lucide icon when one is set (and still
- * exists in the icon set), otherwise the default folder glyph.
+ * The icon for a type: its custom emoji when one is set, otherwise the
+ * default folder glyph.
  */
 export function TypeIcon({
   icon,
@@ -12,7 +12,7 @@ export function TypeIcon({
   className,
   style,
 }: {
-  /** Lucide icon name stored for this type, if any. */
+  /** Emoji stored for this type, if any. */
   icon?: string;
   /** Renders the fallback as an open folder (expanded tree rows). */
   open?: boolean;
@@ -20,8 +20,24 @@ export function TypeIcon({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const Custom = getIconComponent(icon);
-  if (Custom) return <Custom size={size} className={className} style={style} />;
+  if (isEmojiValue(icon)) {
+    return (
+      <span
+        role="img"
+        className={className}
+        style={{
+          fontSize: size,
+          lineHeight: 1,
+          width: size,
+          display: "inline-flex",
+          justifyContent: "center",
+          ...style,
+        }}
+      >
+        {icon}
+      </span>
+    );
+  }
   const Fallback = open ? FolderOpen : Folder;
   return <Fallback size={size} className={className} style={style} />;
 }

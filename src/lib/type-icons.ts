@@ -1,230 +1,218 @@
-import { icons, type LucideIcon } from "lucide-react";
+import data from "@emoji-mart/data";
+import { SearchIndex, init } from "emoji-mart";
 
-/** Custom icons per type, keyed by full type key ("work/projects") — the
- *  value is a lucide icon name ("Briefcase"). Types without an entry fall
- *  back to the folder glyph. Persisted per vault in `.grimoire/type-icons.json`. */
+/** Custom emoji per type, keyed by full type key ("work/projects") — the
+ *  value is a native emoji ("🍳"). Types without an entry fall back to the
+ *  folder glyph. Persisted per vault in `.grimoire/type-icons.json`. */
 export type TypeIcons = Record<string, string>;
 
-export const ALL_ICON_NAMES = Object.keys(icons);
+let emojiDataReady: Promise<unknown> | null = null;
 
-export function getIconComponent(name: string | undefined): LucideIcon | null {
-  if (!name) return null;
-  return (icons as Record<string, LucideIcon>)[name] ?? null;
+/** Initializes emoji-mart's shared data once — the picker and search use it. */
+export function ensureEmojiData(): Promise<unknown> {
+  emojiDataReady ??= init({ data });
+  return emojiDataReady;
 }
 
-/** "AlarmClockCheck" → "alarm clock check", for searching and matching. */
-export function iconSearchText(name: string): string {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .toLowerCase();
-}
+export { data as emojiData };
 
-const searchTextByName = new Map<string, string>(
-  ALL_ICON_NAMES.map((name) => [name, iconSearchText(name)]),
-);
-
-/** Icons whose words contain every query word as a substring. */
-export function searchIcons(query: string): string[] {
-  const words = query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-  if (!words.length) return ALL_ICON_NAMES;
-  return ALL_ICON_NAMES.filter((name) => {
-    const text = searchTextByName.get(name) ?? "";
-    return words.every((word) => text.includes(word));
-  });
+/** True for values that render as an emoji (filters out legacy icon names). */
+export function isEmojiValue(value: unknown): value is string {
+  return typeof value === "string" && /\P{ASCII}/u.test(value);
 }
 
 // ---- icon suggestion ---------------------------------------------------------
 
-/** Concept → icon, checked word-by-word against a new type's name. Ordered
- *  maps beat literal icon names ("work" should give a briefcase, not "Worm"). */
-const KEYWORD_ICONS: Record<string, string> = {
-  work: "Briefcase",
-  job: "Briefcase",
-  career: "Briefcase",
-  office: "Briefcase",
-  project: "FolderKanban",
-  task: "ListChecks",
-  todo: "ListChecks",
-  checklist: "ListChecks",
-  goal: "Target",
-  habit: "Repeat",
-  journal: "NotebookPen",
-  diary: "NotebookPen",
-  daily: "CalendarDays",
-  weekly: "CalendarDays",
-  note: "StickyNote",
-  idea: "Lightbulb",
-  brainstorm: "Lightbulb",
-  inbox: "Inbox",
-  archive: "Archive",
-  draft: "FileText",
-  template: "LayoutTemplate",
-  meeting: "Users",
-  people: "Users",
-  person: "User",
-  contact: "Users",
-  team: "Users",
-  friend: "Users",
-  family: "Users",
-  kid: "Baby",
-  child: "Baby",
-  book: "BookOpen",
-  reading: "BookOpen",
-  library: "LibraryBig",
-  writing: "PenLine",
-  blog: "Rss",
-  article: "Newspaper",
-  news: "Newspaper",
-  quote: "Quote",
-  poem: "Feather",
-  poetry: "Feather",
-  story: "BookOpenText",
-  recipe: "ChefHat",
-  cooking: "ChefHat",
-  baking: "ChefHat",
-  food: "UtensilsCrossed",
-  meal: "UtensilsCrossed",
-  restaurant: "UtensilsCrossed",
-  coffee: "Coffee",
-  wine: "Wine",
-  beer: "Beer",
-  travel: "Plane",
-  trip: "Plane",
-  vacation: "TreePalm",
-  holiday: "TreePalm",
-  hiking: "Mountain",
-  camping: "Tent",
-  finance: "Wallet",
-  money: "Wallet",
-  budget: "Wallet",
-  bank: "Landmark",
-  invest: "TrendingUp",
-  investment: "TrendingUp",
-  stock: "TrendingUp",
-  crypto: "Bitcoin",
-  tax: "Receipt",
-  invoice: "Receipt",
-  receipt: "Receipt",
-  subscription: "CreditCard",
-  shopping: "ShoppingCart",
-  grocery: "ShoppingBasket",
-  wishlist: "Gift",
-  gift: "Gift",
-  health: "HeartPulse",
-  medical: "Stethoscope",
-  doctor: "Stethoscope",
-  medicine: "Pill",
-  fitness: "Dumbbell",
-  workout: "Dumbbell",
-  gym: "Dumbbell",
-  running: "Footprints",
-  yoga: "Flower2",
-  sleep: "Moon",
-  dream: "Moon",
-  meditation: "Sparkles",
-  code: "Code",
-  coding: "Code",
-  programming: "Code",
-  dev: "Code",
-  software: "Code",
-  snippet: "Code",
-  bug: "Bug",
-  server: "Server",
-  database: "Database",
-  api: "Braces",
-  terminal: "Terminal",
-  git: "GitBranch",
-  design: "Palette",
-  art: "Palette",
-  drawing: "Brush",
-  photo: "Image",
-  photography: "Camera",
-  video: "Video",
-  music: "Music",
-  song: "Music",
-  podcast: "Podcast",
-  movie: "Film",
-  film: "Film",
-  tv: "Tv",
-  show: "Tv",
-  anime: "Tv",
-  game: "Gamepad2",
-  gaming: "Gamepad2",
-  chess: "Puzzle",
-  hobby: "Puzzle",
-  school: "GraduationCap",
-  study: "GraduationCap",
-  course: "GraduationCap",
-  class: "GraduationCap",
-  learning: "GraduationCap",
-  education: "GraduationCap",
-  research: "FlaskConical",
-  science: "FlaskConical",
-  math: "Sigma",
-  language: "Languages",
-  history: "Scroll",
-  philosophy: "Scroll",
-  religion: "Church",
-  garden: "Sprout",
-  plant: "Sprout",
-  nature: "Trees",
-  weather: "CloudSun",
-  pet: "PawPrint",
-  dog: "Dog",
-  cat: "Cat",
-  bird: "Bird",
-  fish: "Fish",
-  car: "Car",
-  auto: "Car",
-  bike: "Bike",
-  motorcycle: "Bike",
-  boat: "Sailboat",
-  home: "House",
-  house: "House",
-  apartment: "Building2",
-  renovation: "Hammer",
-  diy: "Hammer",
-  repair: "Wrench",
-  tool: "Wrench",
-  cleaning: "Sparkles",
-  event: "Calendar",
-  calendar: "Calendar",
-  birthday: "Cake",
-  wedding: "Gem",
-  party: "PartyPopper",
-  christmas: "Gift",
-  email: "Mail",
-  letter: "Mail",
-  phone: "Phone",
-  call: "Phone",
-  chat: "MessageCircle",
-  password: "KeyRound",
-  secret: "KeyRound",
-  security: "Shield",
-  legal: "Scale",
-  law: "Scale",
-  contract: "Signature",
-  insurance: "ShieldCheck",
-  favorite: "Star",
-  important: "Star",
-  urgent: "CircleAlert",
-  random: "Shuffle",
-  misc: "Shapes",
-  personal: "User",
-  private: "Lock",
-  client: "Handshake",
-  customer: "Handshake",
-  sales: "TrendingUp",
-  marketing: "Megaphone",
-  product: "Package",
-  startup: "Rocket",
-  business: "Briefcase",
-  company: "Building2",
-  hr: "Users",
-  interview: "MessagesSquare",
-  weld: "Flame",
-  welding: "Flame",
+/** Concept → emoji, checked word-by-word against a new type's name. Curated
+ *  because emoji search misses concept words ("recipe", "meeting", "finance"). */
+const KEYWORD_EMOJI: Record<string, string> = {
+  work: "💼",
+  job: "💼",
+  career: "💼",
+  business: "💼",
+  office: "🏢",
+  company: "🏢",
+  apartment: "🏢",
+  project: "📂",
+  task: "✅",
+  todo: "✅",
+  checklist: "✅",
+  goal: "🎯",
+  habit: "🔁",
+  journal: "📓",
+  diary: "📔",
+  daily: "📅",
+  weekly: "📅",
+  event: "📅",
+  calendar: "📅",
+  note: "📝",
+  draft: "📝",
+  idea: "💡",
+  brainstorm: "💡",
+  inbox: "📥",
+  archive: "🗃️",
+  template: "📐",
+  meeting: "👥",
+  people: "👥",
+  team: "👥",
+  friend: "👥",
+  hr: "👥",
+  person: "👤",
+  personal: "👤",
+  contact: "📇",
+  family: "👨‍👩‍👧",
+  kid: "👶",
+  child: "👶",
+  baby: "👶",
+  book: "📚",
+  library: "📚",
+  reading: "📖",
+  story: "📖",
+  study: "📖",
+  writing: "✍️",
+  contract: "✍️",
+  blog: "📰",
+  article: "📰",
+  news: "📰",
+  quote: "💬",
+  chat: "💬",
+  interview: "💬",
+  poem: "🪶",
+  poetry: "🪶",
+  recipe: "🍳",
+  cooking: "🍳",
+  baking: "🧁",
+  food: "🍽️",
+  meal: "🍽️",
+  restaurant: "🍽️",
+  coffee: "☕",
+  wine: "🍷",
+  beer: "🍺",
+  travel: "✈️",
+  trip: "✈️",
+  flight: "✈️",
+  vacation: "🏝️",
+  holiday: "🏝️",
+  hiking: "🥾",
+  camping: "⛺",
+  finance: "💰",
+  money: "💰",
+  budget: "💰",
+  bank: "🏦",
+  invest: "📈",
+  investment: "📈",
+  stock: "📈",
+  sales: "📈",
+  crypto: "🪙",
+  tax: "🧾",
+  invoice: "🧾",
+  receipt: "🧾",
+  subscription: "💳",
+  shopping: "🛒",
+  grocery: "🛒",
+  wishlist: "🎁",
+  gift: "🎁",
+  christmas: "🎄",
+  health: "🩺",
+  medical: "🩺",
+  doctor: "🩺",
+  medicine: "💊",
+  fitness: "🏋️",
+  workout: "🏋️",
+  gym: "🏋️",
+  running: "🏃",
+  yoga: "🧘",
+  meditation: "🧘",
+  sleep: "😴",
+  dream: "🌙",
+  code: "💻",
+  coding: "💻",
+  programming: "💻",
+  dev: "💻",
+  software: "💻",
+  snippet: "💻",
+  bug: "🐛",
+  server: "🖥️",
+  terminal: "🖥️",
+  database: "🗄️",
+  api: "🔌",
+  design: "🎨",
+  art: "🎨",
+  drawing: "✏️",
+  photo: "📷",
+  photography: "📷",
+  video: "🎥",
+  music: "🎵",
+  song: "🎵",
+  podcast: "🎙️",
+  movie: "🎬",
+  film: "🎬",
+  tv: "📺",
+  show: "📺",
+  anime: "📺",
+  game: "🎮",
+  gaming: "🎮",
+  chess: "♟️",
+  hobby: "🧩",
+  school: "🎓",
+  course: "🎓",
+  class: "🎓",
+  learning: "🎓",
+  education: "🎓",
+  research: "🔬",
+  science: "🔬",
+  math: "➗",
+  language: "🗣️",
+  history: "📜",
+  philosophy: "🏛️",
+  religion: "⛪",
+  garden: "🌱",
+  plant: "🪴",
+  nature: "🌳",
+  weather: "⛅",
+  pet: "🐾",
+  dog: "🐶",
+  cat: "🐱",
+  bird: "🐦",
+  fish: "🐟",
+  car: "🚗",
+  auto: "🚗",
+  bike: "🚲",
+  motorcycle: "🏍️",
+  boat: "⛵",
+  home: "🏠",
+  house: "🏠",
+  renovation: "🔨",
+  diy: "🔨",
+  repair: "🔧",
+  tool: "🔧",
+  cleaning: "🧹",
+  birthday: "🎂",
+  wedding: "💍",
+  party: "🎉",
+  email: "✉️",
+  letter: "✉️",
+  phone: "📞",
+  call: "📞",
+  password: "🔑",
+  secret: "🔑",
+  security: "🛡️",
+  insurance: "🛡️",
+  legal: "⚖️",
+  law: "⚖️",
+  favorite: "⭐",
+  important: "⭐",
+  urgent: "🚨",
+  random: "🎲",
+  misc: "🗂️",
+  private: "🔒",
+  client: "🤝",
+  customer: "🤝",
+  marketing: "📣",
+  product: "📦",
+  startup: "🚀",
+  weld: "🔥",
+  welding: "🔥",
 };
 
 /** Singular candidates — "categories" → ["category", "categorie"], "boxes" → ["boxe", "box"]. */
@@ -237,33 +225,47 @@ function singulars(word: string): string[] {
   return [];
 }
 
+interface SearchedEmoji {
+  skins?: { native?: string }[];
+}
+
+async function searchEmoji(query: string): Promise<string | null> {
+  try {
+    await ensureEmojiData();
+    const results = (await SearchIndex.search(query)) as
+      | SearchedEmoji[]
+      | undefined;
+    return results?.[0]?.skins?.[0]?.native ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Picks a fitting icon for a type from its name (e.g. "Recipes" → ChefHat),
+ * Picks a fitting emoji for a type from its name (e.g. "Recipes" → 🍳),
  * or null when nothing matches — callers then keep the default folder glyph.
+ * Tries the curated concept map first, then emoji-mart's search index.
  */
-export function suggestIconForType(typeName: string): string | null {
+export async function suggestIconForType(
+  typeName: string,
+): Promise<string | null> {
   const raw = typeName.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const words = [...new Set(raw.flatMap((word) => [word, ...singulars(word)]))];
 
   for (const word of words) {
-    const mapped = KEYWORD_ICONS[word];
+    const mapped = KEYWORD_EMOJI[word];
     if (mapped) return mapped;
   }
 
-  // the whole name spells out an icon ("alarm clock" → AlarmClock)
-  const fullNames = new Set([
-    raw.join(" "),
-    raw.map((word) => singulars(word)[0] ?? word).join(" "),
-  ]);
-  for (const [name, text] of searchTextByName) {
-    if (fullNames.has(text)) return name;
+  // the whole name may match better than single words ("polar bear" → 🐻‍❄️)
+  if (raw.length > 1) {
+    const full = await searchEmoji(raw.join(" "));
+    if (full) return full;
   }
 
-  // a word matches an icon name outright ("calendar" → Calendar)
   for (const word of words) {
-    for (const [name, text] of searchTextByName) {
-      if (text === word) return name;
-    }
+    const found = await searchEmoji(word);
+    if (found) return found;
   }
 
   return null;

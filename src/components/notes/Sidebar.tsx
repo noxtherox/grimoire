@@ -56,7 +56,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeSettingsDialog } from "./ThemeSettingsDialog";
 import { TypeIcon } from "./TypeIcon";
-import { IconPickerDialog } from "./IconPickerDialog";
+import { EmojiPickerDialog } from "./EmojiPickerDialog";
 
 interface SidebarProps {
   notes: Note[];
@@ -423,10 +423,9 @@ export function Sidebar({
         )}
       </div>
       <ThemeSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-      <IconPickerDialog
+      <EmojiPickerDialog
         open={iconTarget !== null}
         typeName={iconTarget?.name ?? ""}
-        value={iconTarget ? typeIcons[typeKey(iconTarget.path)] : undefined}
         onOpenChange={(open) => {
           if (!open) setIconTarget(null);
         }}
