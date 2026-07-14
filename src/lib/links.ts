@@ -17,7 +17,7 @@ export function getOutgoingRelationTitles(
 ): string[] {
   const props = getNoteProperties(content);
   const titles: string[] = [];
-  for (const { def } of effectiveProperties(typePath, schemas)) {
+  for (const def of effectiveProperties(typePath, schemas)) {
     if (def.type !== "relation") continue;
     const value = props[def.name];
     if (value == null) continue;
