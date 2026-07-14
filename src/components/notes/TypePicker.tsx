@@ -49,7 +49,7 @@ export function TypePicker({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 gap-1 rounded-full border-[hsl(4_66%_55%/0.35)] bg-[hsl(4_66%_55%/0.06)] px-2.5 text-xs font-medium text-[hsl(4_50%_40%)] hover:bg-[hsl(4_66%_55%/0.12)] hover:text-[hsl(4_50%_35%)]"
+          className="h-7 gap-1 rounded-full border-grim-accent/35 bg-grim-accent/5 px-2.5 text-xs font-medium text-grim-accent hover:bg-grim-accent/10 hover:text-grim-accent"
           title="Type — the folder this note lives in (type / sub-type / sub-sub-type)"
         >
           <Folder size={12} />

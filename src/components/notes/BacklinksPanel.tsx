@@ -32,7 +32,7 @@ export function BacklinksPanel({
   return (
     <aside
       className={cn(
-        "flex flex-col overflow-y-auto border-l border-border/60 bg-[hsl(40_20%_98%)]",
+        "flex flex-col overflow-y-auto border-l border-border/60 bg-grim-surface",
         expanded ? "min-w-0 flex-1" : "w-72 shrink-0",
       )}
     >
@@ -77,7 +77,7 @@ export function BacklinksPanel({
           <div className="space-y-4">
             {[...groups.entries()].map(([type, linkingNotes]) => (
               <div key={type}>
-                <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-[hsl(4_50%_45%)]">
+                <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-grim-accent">
                   <Folder size={12} />
                   {type ? type.split("/").join(" / ") : "unfiled"}
                   <span className="text-muted-foreground">
@@ -95,9 +95,9 @@ export function BacklinksPanel({
                     <li key={linkingNote.id}>
                       <button
                         onClick={() => onOpenNote(linkingNote.id)}
-                        className="block h-full w-full rounded-md border border-border/50 bg-white px-3 py-2 text-left transition-colors hover:border-[hsl(4_66%_55%/0.4)] hover:bg-[hsl(4_66%_55%/0.04)]"
+                        className="block h-full w-full rounded-md border border-border/50 bg-grim-editor px-3 py-2 text-left transition-colors hover:border-grim-accent/40 hover:bg-grim-accent/5"
                       >
-                        <span className="block truncate text-sm font-medium text-[hsl(211_90%_40%)]">
+                        <span className="block truncate text-sm font-medium text-grim-link">
                           {noteTitle(linkingNote)}
                         </span>
                         {noteSnippet(linkingNote) && (

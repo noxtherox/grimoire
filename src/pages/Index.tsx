@@ -75,7 +75,7 @@ const Index = () => {
 
   if (vault.status === "pick-vault" || vault.status === "error") {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[hsl(40_20%_97%)]">
+      <div className="flex h-screen w-screen items-center justify-center bg-grim-surface">
         <div className="max-w-sm text-center">
           <p className="text-5xl">📖</p>
           <h1 className="mt-4 text-xl font-semibold">Grimoire</h1>
@@ -101,7 +101,7 @@ const Index = () => {
 
   if (vault.status !== "ready") {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[hsl(40_20%_97%)]">
+      <div className="flex h-screen w-screen items-center justify-center bg-grim-surface">
         <Loader2 className="animate-spin text-muted-foreground" />
       </div>
     );

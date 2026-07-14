@@ -17,7 +17,7 @@ import {
 import { syntaxTree } from "@codemirror/language";
 import { WIKILINK_REGEX } from "@/lib/note-utils";
 
-const ACCENT = "hsl(4 66% 55%)";
+const ACCENT = "rgb(var(--grim-accent))";
 
 const toggleEffect = StateEffect.define<boolean>();
 

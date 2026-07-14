@@ -8,6 +8,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Settings,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ThemeSettingsDialog } from "./ThemeSettingsDialog";
 
 interface SidebarProps {
   notes: Note[];
@@ -87,8 +89,8 @@ function SidebarRow({
       className={cn(
         "flex w-full items-center rounded-md text-sm transition-colors",
         active
-          ? "bg-white/15 text-white"
-          : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+          ? "bg-grim-sidebar-fg/15 text-grim-sidebar-fg"
+          : "text-grim-sidebar-fg/70 hover:bg-grim-sidebar-fg/5 hover:text-grim-sidebar-fg/90",
       )}
       style={{ paddingLeft: `${depth * 14}px` }}
     >
@@ -99,7 +101,7 @@ function SidebarRow({
             onToggle?.();
           }}
           className={cn(
-            "flex h-6 w-5 shrink-0 items-center justify-center text-zinc-500 hover:text-zinc-300",
+            "flex h-6 w-5 shrink-0 items-center justify-center text-grim-sidebar-fg/50 hover:text-grim-sidebar-fg/90",
             chevron === "leaf" && "pointer-events-none opacity-0",
           )}
           tabIndex={-1}
@@ -118,7 +120,9 @@ function SidebarRow({
         <span className="shrink-0 opacity-80">{icon}</span>
         <span className="flex-1 truncate">{label}</span>
         {count !== undefined && (
-          <span className="text-xs tabular-nums text-zinc-500">{count}</span>
+          <span className="text-xs tabular-nums text-grim-sidebar-fg/50">
+            {count}
+          </span>
         )}
       </button>
     </div>
@@ -304,16 +308,18 @@ export function Sidebar({
 
   const vaultName = vaultLocation?.split("/").filter(Boolean).pop();
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   return (
-    <div className="flex h-full flex-col bg-[hsl(240_6%_13%)] pt-4">
+    <div className="flex h-full flex-col bg-grim-sidebar pt-4">
       <div className="flex items-center justify-between px-4 pb-3">
-        <h1 className="text-sm font-semibold tracking-wide text-zinc-300">
+        <h1 className="text-sm font-semibold tracking-wide text-grim-sidebar-fg/90">
           📖 Grimoire
         </h1>
         <button
           onClick={() => void reloadVault()}
           title="Reload vault from disk"
-          className="text-zinc-500 transition-colors hover:text-zinc-300"
+          className="text-grim-sidebar-fg/50 transition-colors hover:text-grim-sidebar-fg/90"
         >
           <RefreshCw size={13} />
         </button>
@@ -327,13 +333,13 @@ export function Sidebar({
           count={activeCount}
         />
         <div className="flex items-center justify-between pb-1 pl-3 pr-2 pt-4">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-600">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-grim-sidebar-fg/40">
             Types
           </span>
           <button
             onClick={() => setTypeDraft("")}
             title="New type — it can stay empty until you add notes"
-            className="text-zinc-600 transition-colors hover:text-zinc-300"
+            className="text-grim-sidebar-fg/40 transition-colors hover:text-grim-sidebar-fg/90"
           >
             <Plus size={13} />
           </button>
@@ -355,7 +361,7 @@ export function Sidebar({
               }}
               onBlur={() => setTypeDraft(null)}
               placeholder="new type (e.g. work/projects)"
-              className="w-full rounded-md border border-white/10 bg-white/5 px-2 py-1 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-white/25"
+              className="w-full rounded-md border border-grim-sidebar-fg/10 bg-grim-sidebar-fg/5 px-2 py-1 text-sm text-grim-sidebar-fg placeholder:text-grim-sidebar-fg/40 focus:outline-none focus:ring-1 focus:ring-grim-sidebar-fg/25"
             />
           </form>
         )}
@@ -370,7 +376,13 @@ export function Sidebar({
           onDeleteType={setDeleteTarget}
         />
       </nav>
-      <div className="space-y-0.5 border-t border-white/10 p-2">
+      <div className="space-y-0.5 border-t border-grim-sidebar-fg/10 p-2">
+        <SidebarRow
+          active={settingsOpen}
+          onClick={() => setSettingsOpen(true)}
+          icon={<Settings size={15} />}
+          label="Settings"
+        />
         <SidebarRow
           active={filter.kind === "trash"}
           onClick={() => onFilterChange({ kind: "trash" })}
@@ -382,12 +394,13 @@ export function Sidebar({
           <button
             onClick={() => void chooseVaultFolder()}
             title={vaultLocation ?? undefined}
-            className="w-full truncate rounded-md px-3 py-1 text-left text-[11px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-400"
+            className="w-full truncate rounded-md px-3 py-1 text-left text-[11px] text-grim-sidebar-fg/40 transition-colors hover:bg-grim-sidebar-fg/5 hover:text-grim-sidebar-fg/70"
           >
             Vault: {vaultName ?? "choose folder…"}
           </button>
         )}
       </div>
+      <ThemeSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <Dialog
         open={renameTarget !== null}
         onOpenChange={(open) => {

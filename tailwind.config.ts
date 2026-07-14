@@ -52,6 +52,15 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        grim: {
+          accent: "rgb(var(--grim-accent) / <alpha-value>)",
+          link: "rgb(var(--grim-link) / <alpha-value>)",
+          text: "rgb(var(--grim-text) / <alpha-value>)",
+          editor: "rgb(var(--grim-editor-bg) / <alpha-value>)",
+          surface: "rgb(var(--grim-surface) / <alpha-value>)",
+          sidebar: "rgb(var(--grim-sidebar-bg) / <alpha-value>)",
+          "sidebar-fg": "rgb(var(--grim-sidebar-fg) / <alpha-value>)",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
