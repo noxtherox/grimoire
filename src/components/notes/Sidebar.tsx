@@ -261,12 +261,14 @@ export function Sidebar({
     if (!renamed) return;
     setRenameTarget(null);
     const oldKey = typeKey(oldPath);
-    const activeKey = filter.kind === "type" ? typeKey(filter.path) : null;
-    if (activeKey && (activeKey === oldKey || activeKey.startsWith(`${oldKey}/`))) {
-      onFilterChange({
-        kind: "type",
-        path: [...newPath, ...filter.path.slice(oldPath.length)],
-      });
+    if (filter.kind === "type") {
+      const activeKey = typeKey(filter.path);
+      if (activeKey === oldKey || activeKey.startsWith(`${oldKey}/`)) {
+        onFilterChange({
+          kind: "type",
+          path: [...newPath, ...filter.path.slice(oldPath.length)],
+        });
+      }
     }
   };
 
