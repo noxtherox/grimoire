@@ -23,7 +23,11 @@ import {
   setContentProperty,
   withBody,
 } from "@/lib/frontmatter";
-import type { PropertyDef, PropertySchemas } from "@/lib/properties";
+import {
+  type PropertyDef,
+  type PropertySchemas,
+  hoistSchemasToTopLevel,
+} from "@/lib/properties";
 import type { VaultBackend } from "@/lib/vault/backend";
 import { BrowserVault } from "@/lib/vault/browser";
 import { DesktopVault } from "@/lib/vault/desktop";
@@ -40,7 +44,7 @@ export interface VaultState {
   notes: Note[];
   /** Types that exist as folders even without notes in them (empty types). */
   extraTypes: string[][];
-  /** Per-type property definitions, keyed by type key ("work/projects"). */
+  /** Property definitions, keyed by top-level type key ("work"). */
   schemas: PropertySchemas;
   error: string | null;
 }
@@ -117,7 +121,14 @@ async function loadSchemas(fromBackend: VaultBackend): Promise<PropertySchemas> 
   try {
     const raw = await fromBackend.readText(SCHEMAS_PATH);
     const parsed = JSON.parse(raw) as PropertySchemas;
-    return parsed && typeof parsed === "object" ? parsed : {};
+    if (!parsed || typeof parsed !== "object") return {};
+    // one-time migration: older vaults stored definitions per sub-type
+    const hoisted = hoistSchemasToTopLevel(parsed);
+    if (!hoisted) return parsed;
+    await fromBackend
+      .write(SCHEMAS_PATH, JSON.stringify(hoisted, null, 2))
+      .catch(() => {}); // keep the hoisted view even if the write fails
+    return hoisted;
   } catch {
     return {}; // missing or unreadable — start empty
   }
@@ -372,7 +383,13 @@ function notesOfType(ownerKey: string): Note[] {
   return notesOfTypeKey(state.notes, ownerKey);
 }
 
-export function addTypeProperty(ownerKey: string, def: PropertyDef) {
+/** Definitions always live on the top-level type, whatever key callers pass. */
+function schemaOwnerKey(typeKeyOrPath: string): string {
+  return typeKeyOrPath.split("/")[0];
+}
+
+export function addTypeProperty(typeKeyOrPath: string, def: PropertyDef) {
+  const ownerKey = schemaOwnerKey(typeKeyOrPath);
   const defs = state.schemas[ownerKey] ?? [];
   if (defs.some((d) => d.name.toLowerCase() === def.name.toLowerCase())) return;
   saveSchemas({ ...state.schemas, [ownerKey]: [...defs, def] });
@@ -380,10 +397,11 @@ export function addTypeProperty(ownerKey: string, def: PropertyDef) {
 
 /** Edits a property definition; a rename migrates the key in every note of the type. */
 export function updateTypeProperty(
-  ownerKey: string,
+  typeKeyOrPath: string,
   oldName: string,
   def: PropertyDef,
 ) {
+  const ownerKey = schemaOwnerKey(typeKeyOrPath);
   const defs = state.schemas[ownerKey] ?? [];
   const idx = defs.findIndex(
     (d) => d.name.toLowerCase() === oldName.toLowerCase(),
@@ -405,7 +423,8 @@ export function updateTypeProperty(
 }
 
 /** Deletes a property from the type and strips its value from the type's notes. */
-export function removeTypeProperty(ownerKey: string, name: string) {
+export function removeTypeProperty(typeKeyOrPath: string, name: string) {
+  const ownerKey = schemaOwnerKey(typeKeyOrPath);
   const defs = state.schemas[ownerKey] ?? [];
   const next = defs.filter((d) => d.name.toLowerCase() !== name.toLowerCase());
   if (next.length === defs.length) return;

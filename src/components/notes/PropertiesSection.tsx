@@ -34,6 +34,7 @@ import {
   effectiveProperties,
   inferPropertyType,
   sanitizePropertyName,
+  schemaKeyFor,
 } from "@/lib/properties";
 import {
   type Note,
@@ -491,12 +492,15 @@ export function PropertiesSection({
 
   const typePath = noteTypePath(note);
   const ownKey = typeKey(typePath);
+  // definitions live on the top-level type and cascade to every sub-type
+  const topKey = schemaKeyFor(typePath);
+  const topLabel = topKey || "unfiled";
   const effective = effectiveProperties(typePath, schemas);
   const values = getNoteProperties(note.content);
   const existingTypePaths = getAllTypePaths(allNotes, extraTypes);
 
   // frontmatter keys not covered by the type's definitions (ad-hoc properties)
-  const covered = new Set(effective.map(({ def }) => def.name.toLowerCase()));
+  const covered = new Set(effective.map((def) => def.name.toLowerCase()));
   const extras = Object.entries(values).filter(
     ([key]) => !covered.has(key.toLowerCase()),
   );
@@ -521,28 +525,24 @@ export function PropertiesSection({
         {effective.length === 0 && extras.length === 0 && (
           <p className="px-1 pb-1 text-xs text-muted-foreground">
             Properties added here apply to every{" "}
-            <span className="font-medium">{ownKey || "unfiled"}</span> note.
+            <span className="font-medium">{topLabel}</span> note, including
+            sub-types.
           </p>
         )}
-        {effective.map(({ def, ownerKey }) => {
+        {effective.map((def) => {
           const Icon = TYPE_ICONS[def.type];
-          const inherited = ownerKey !== ownKey;
           return (
-            <div key={`${ownerKey}:${def.name}`} className="flex items-start gap-1">
+            <div key={def.name} className="flex items-start gap-1">
               <Popover
-                open={editing === `${ownerKey}:${def.name}`}
+                open={editing === `def:${def.name}`}
                 onOpenChange={(open) =>
-                  setEditing(open ? `${ownerKey}:${def.name}` : null)
+                  setEditing(open ? `def:${def.name}` : null)
                 }
               >
                 <PopoverTrigger asChild>
                   <button
                     className={`flex ${nameColumnClass} shrink-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground`}
-                    title={
-                      inherited
-                        ? `Defined on "${ownerKey}" — applies to all its sub-types`
-                        : `Applies to every "${ownerKey || "unfiled"}" note`
-                    }
+                    title={`Defined on "${topLabel}" — applies to it and all its sub-types`}
                   >
                     <Icon size={12} className="shrink-0 opacity-70" />
                     <span className="truncate">{def.name}</span>
@@ -550,7 +550,7 @@ export function PropertiesSection({
                 </PopoverTrigger>
                 <PopoverContent className="w-56 p-3" align="start">
                   <p className="mb-2 text-xs text-muted-foreground">
-                    Edits apply to all <span className="font-medium">{ownerKey}</span>{" "}
+                    Edits apply to all <span className="font-medium">{topLabel}</span>{" "}
                     notes.
                   </p>
                   <DefForm
@@ -558,11 +558,11 @@ export function PropertiesSection({
                     submitLabel="Save"
                     existingTypePaths={existingTypePaths}
                     onSubmit={(next) => {
-                      updateTypeProperty(ownerKey, def.name, next);
+                      updateTypeProperty(topKey, def.name, next);
                       setEditing(null);
                     }}
                     onDelete={() => {
-                      removeTypeProperty(ownerKey, def.name);
+                      removeTypeProperty(topKey, def.name);
                       setEditing(null);
                     }}
                   />
@@ -610,12 +610,12 @@ export function PropertiesSection({
                     onClick={() => {
                       const name = sanitizePropertyName(key);
                       if (name)
-                        addTypeProperty(ownKey, { name, type: inferredType });
+                        addTypeProperty(topKey, { name, type: inferredType });
                       setEditing(null);
                     }}
                   >
                     <Plus size={12} className="mr-1.5" />
-                    Add to “{ownKey || "unfiled"}”
+                    Add to “{topLabel}”
                   </Button>
                   <Button
                     size="sm"
@@ -656,14 +656,14 @@ export function PropertiesSection({
           </PopoverTrigger>
           <PopoverContent className="w-56 p-3" align="start">
             <p className="mb-2 text-xs text-muted-foreground">
-              Added to every <span className="font-medium">{ownKey || "unfiled"}</span>{" "}
-              note.
+              Added to every <span className="font-medium">{topLabel}</span>{" "}
+              note, including sub-types.
             </p>
             <DefForm
               submitLabel="Add"
               existingTypePaths={existingTypePaths}
               onSubmit={(def) => {
-                addTypeProperty(ownKey, def);
+                addTypeProperty(topKey, def);
                 setAddOpen(false);
               }}
             />
