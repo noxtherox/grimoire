@@ -15,7 +15,10 @@ import {
 } from "@codemirror/autocomplete";
 import { WIKILINK_REGEX } from "@/lib/note-utils";
 
-const ACCENT = "hsl(4 66% 55%)"; // Bear-ish red accent
+// Theme tokens from globals.css / src/lib/theme.ts (user-customizable)
+const ACCENT = "rgb(var(--grim-accent))";
+const LINK = "rgb(var(--grim-link))";
+const TEXT = "rgb(var(--grim-text))";
 
 export const editorTheme = EditorView.theme({
   "&": {
@@ -35,18 +38,18 @@ export const editorTheme = EditorView.theme({
   ".cm-line": { padding: "0" },
   ".cm-cursor": { borderLeftColor: ACCENT, borderLeftWidth: "2px" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
-    backgroundColor: "hsl(4 66% 55% / 0.15) !important",
+    backgroundColor: "rgb(var(--grim-accent) / 0.15) !important",
   },
   ".cm-wikilink": {
-    color: "hsl(211 90% 48%)",
+    color: LINK,
     cursor: "pointer",
     borderRadius: "3px",
   },
   ".cm-wikilink:hover": { textDecoration: "underline" },
-  ".cm-wikilink-unresolved": { color: "hsl(211 30% 60%)" },
+  ".cm-wikilink-unresolved": { color: "rgb(var(--grim-link) / 0.55)" },
   ".cm-inline-tag": {
     color: ACCENT,
-    backgroundColor: "hsl(4 66% 55% / 0.08)",
+    backgroundColor: "rgb(var(--grim-accent) / 0.08)",
     borderRadius: "9999px",
     padding: "1px 2px",
   },
@@ -90,28 +93,28 @@ export const editorTheme = EditorView.theme({
   ".cm-tooltip.cm-tooltip-autocomplete": {
     border: "1px solid hsl(214 32% 91%)",
     borderRadius: "8px",
-    backgroundColor: "white",
+    backgroundColor: "rgb(var(--grim-editor-bg))",
     boxShadow: "0 8px 24px rgb(0 0 0 / 0.12)",
     overflow: "hidden",
   },
   ".cm-tooltip-autocomplete ul li": { padding: "4px 10px" },
   ".cm-tooltip-autocomplete ul li[aria-selected]": {
-    backgroundColor: "hsl(4 66% 55% / 0.12)",
+    backgroundColor: "rgb(var(--grim-accent) / 0.12)",
     color: "inherit",
   },
 });
 
 export const markdownHighlighting = syntaxHighlighting(
   HighlightStyle.define([
-    { tag: tags.heading1, fontSize: "1.55em", fontWeight: "700", color: "hsl(222 47% 15%)" },
-    { tag: tags.heading2, fontSize: "1.3em", fontWeight: "700", color: "hsl(222 47% 15%)" },
-    { tag: tags.heading3, fontSize: "1.15em", fontWeight: "600", color: "hsl(222 47% 15%)" },
+    { tag: tags.heading1, fontSize: "1.55em", fontWeight: "700", color: TEXT },
+    { tag: tags.heading2, fontSize: "1.3em", fontWeight: "700", color: TEXT },
+    { tag: tags.heading3, fontSize: "1.15em", fontWeight: "600", color: TEXT },
     { tag: tags.heading4, fontWeight: "600" },
     { tag: tags.strong, fontWeight: "700" },
     { tag: tags.emphasis, fontStyle: "italic" },
     { tag: tags.strikethrough, textDecoration: "line-through" },
-    { tag: tags.link, color: "hsl(211 90% 48%)" },
-    { tag: tags.url, color: "hsl(211 90% 48%)" },
+    { tag: tags.link, color: LINK },
+    { tag: tags.url, color: LINK },
     { tag: tags.quote, color: "hsl(215 16% 47%)", fontStyle: "italic" },
     { tag: tags.monospace, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "0.9em", color: ACCENT },
     { tag: tags.processingInstruction, color: "hsl(215 16% 65%)" },

@@ -153,7 +153,7 @@ function RelationChip({
       className={cn(
         "inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs",
         note
-          ? "border-[hsl(211_90%_40%/0.3)] text-[hsl(211_90%_40%)] hover:bg-[hsl(211_90%_40%/0.08)]"
+          ? "border-grim-link/30 text-grim-link hover:bg-grim-link/10"
           : "border-dashed border-muted-foreground/40 text-muted-foreground",
       )}
     >

@@ -49,6 +49,17 @@
     --sidebar-border: 220 13% 91%;
 
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Grimoire theme tokens — "R G B" triplets, overridden at runtime by the
+       theme settings (src/lib/theme.ts). Keep defaults in sync with
+       DEFAULT_THEME there. */
+    --grim-accent: 216 75 64;
+    --grim-link: 11 106 205;
+    --grim-text: 2 8 23;
+    --grim-editor-bg: 255 255 255;
+    --grim-surface: 249 248 246;
+    --grim-sidebar-bg: 31 31 35;
+    --grim-sidebar-fg: 228 228 231;
   }
 
   .dark {
@@ -96,6 +107,7 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background;
+    color: rgb(var(--grim-text));
   }
 }

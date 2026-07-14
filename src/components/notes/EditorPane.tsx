@@ -47,7 +47,7 @@ export function EditorPane({
 
   if (!note) {
     return (
-      <div className="flex h-full items-center justify-center bg-white">
+      <div className="flex h-full items-center justify-center bg-grim-editor">
         <div className="text-center text-muted-foreground">
           <p className="text-4xl">📖</p>
           <p className="mt-3 text-sm">Select a note, or press ⌘N to create one.</p>
@@ -72,7 +72,7 @@ export function EditorPane({
   };
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="flex h-full flex-col bg-grim-editor">
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
         <TypePicker
           value={noteTypePath(note)}
@@ -94,7 +94,7 @@ export function EditorPane({
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-7 w-7", note.pinned && "text-[hsl(4_66%_55%)]")}
+              className={cn("h-7 w-7", note.pinned && "text-grim-accent")}
               title={note.pinned ? "Unpin" : "Pin"}
               onClick={() => toggleNotePinned(note.id)}
             >
@@ -116,14 +116,14 @@ export function EditorPane({
           size="icon"
           className={cn(
             "relative h-7 w-7",
-            showBacklinks && "bg-muted text-[hsl(4_66%_55%)]",
+            showBacklinks && "bg-muted text-grim-accent",
           )}
           title={showBacklinks ? "Hide backlinks" : "Show backlinks"}
           onClick={() => setShowBacklinks((open) => !open)}
         >
           <Link2 size={15} />
           {backlinkCount > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[hsl(4_66%_55%)] px-0.5 text-[9px] font-semibold leading-none text-white tabular-nums">
+            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-grim-accent px-0.5 text-[9px] font-semibold leading-none text-white tabular-nums">
               {backlinkCount}
             </span>
           )}

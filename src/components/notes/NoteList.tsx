@@ -61,7 +61,7 @@ export function NoteList({
         : filter.path.join(" / ");
 
   return (
-    <div className="flex h-full flex-col bg-[hsl(40_20%_97%)]">
+    <div className="flex h-full flex-col bg-grim-surface">
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2.5">
         <span className="flex-1 truncate text-sm font-semibold">{heading}</span>
         {inTrash ? (
@@ -97,7 +97,7 @@ export function NoteList({
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Search notes…"
-            className="h-8 bg-white pl-8 text-sm"
+            className="h-8 bg-grim-editor pl-8 text-sm"
           />
         </div>
       </div>
@@ -119,13 +119,13 @@ export function NoteList({
                   className={cn(
                     "block w-full border-b border-border/40 px-4 py-3 text-left transition-colors",
                     note.id === selectedNoteId
-                      ? "bg-[hsl(4_66%_55%/0.09)]"
-                      : "hover:bg-black/[0.03]",
+                      ? "bg-grim-accent/10"
+                      : "hover:bg-grim-text/[0.03]",
                   )}
                 >
                   <div className="flex items-center gap-1.5">
                     {note.pinned && (
-                      <Pin size={12} className="shrink-0 text-[hsl(4_66%_55%)]" />
+                      <Pin size={12} className="shrink-0 text-grim-accent" />
                     )}
                     <span className="truncate text-sm font-medium">{title}</span>
                   </div>
