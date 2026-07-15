@@ -7,6 +7,7 @@ Because the vault is just a folder of `.md` files, you can point Grimoire at any
 ## Features
 
 - **Vault = folder**: pick any folder; `type/sub-type/sub-sub-type/Note.md` maps to the type tree in the sidebar
+- **External Notes**: open multiple markdown files from anywhere on your computer without assigning a type; close them without deleting them, inspect/reveal their paths, or move them into the vault and choose a type
 - Three-pane Bear-style layout: type tree sidebar, note list, markdown editor
 - CodeMirror markdown editor with live syntax styling and inline `#tag` highlighting
 - `[[` autocompletes note titles; ⌘/Ctrl+Click a link to follow it (links to missing notes create them)

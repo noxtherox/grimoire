@@ -13,6 +13,8 @@ export interface VaultBackend {
   /** Reads any text file in the vault (config etc.), throws if missing. */
   readText(path: string): Promise<string>;
   write(path: string, content: string): Promise<void>;
+  /** Atomically creates a file and fails if the path already exists. */
+  writeNew(path: string, content: string): Promise<void>;
   move(from: string, to: string): Promise<void>;
   removeFile(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;

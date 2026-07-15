@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { EditorView, placeholder, keymap } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { history, defaultKeymap, historyKeymap } from "@codemirror/commands";
@@ -23,6 +23,7 @@ interface MarkdownEditorProps {
   isTitleResolved: (title: string) => boolean;
   onChange: (content: string) => void;
   onFollowLink: (title: string) => void;
+  readOnly?: boolean;
 }
 
 export function MarkdownEditor({
@@ -32,9 +33,11 @@ export function MarkdownEditor({
   isTitleResolved,
   onChange,
   onFollowLink,
+  readOnly = false,
 }: MarkdownEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const readOnlyCompartmentRef = useRef(new Compartment());
 
   // Keep latest callbacks without recreating the editor
   const callbacksRef = useRef({
@@ -63,6 +66,10 @@ export function MarkdownEditor({
         livePreviewExtension(),
         editorTheme,
         EditorView.lineWrapping,
+        readOnlyCompartmentRef.current.of([
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
+        ]),
         placeholder("Start writing… the first line becomes the title."),
         inlineTagExtension,
         wikilinkExtension({
@@ -92,6 +99,17 @@ export function MarkdownEditor({
     // outward through the update listener, never back in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: readOnlyCompartmentRef.current.reconfigure([
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
+      ]),
+    });
+  }, [readOnly]);
 
   return <div ref={containerRef} className="h-full overflow-y-auto" />;
 }

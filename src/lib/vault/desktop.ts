@@ -10,6 +10,7 @@ import {
   writeFile,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 import { TRASH_DIR, MAX_TYPE_DEPTH } from "@/lib/note-utils";
 import type { VaultBackend, VaultFile } from "./backend";
 
@@ -24,6 +25,13 @@ export class DesktopVault implements VaultBackend {
   }
 
   private abs(relPath: string): string {
+    const segments = relPath.split(/[\\/]/);
+    if (
+      /^(?:[\\/]|[a-z]:[\\/])/i.test(relPath) ||
+      segments.some((segment) => segment === "." || segment === "..")
+    ) {
+      throw new Error(`Unsafe vault path: ${relPath}`);
+    }
     return `${this.root}/${relPath}`;
   }
 
@@ -77,6 +85,14 @@ export class DesktopVault implements VaultBackend {
   async write(path: string, content: string): Promise<void> {
     await this.ensureParentDir(path);
     await writeTextFile(this.abs(path), content);
+  }
+
+  async writeNew(path: string, content: string): Promise<void> {
+    await invoke("write_new_vault_file", {
+      root: this.root,
+      relativePath: path,
+      content,
+    });
   }
 
   async move(from: string, to: string): Promise<void> {

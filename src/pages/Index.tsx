@@ -13,6 +13,8 @@ import {
   chooseVaultFolder,
   createNote,
   initStore,
+  moveExternalNoteToVault,
+  openExternalNotes,
   useVault,
 } from "@/store/notes-store";
 import { filterNotes, type NoteFilter } from "@/lib/filters";
@@ -50,7 +52,9 @@ const Index = () => {
     const typePath = filter.kind === "type" ? filter.path : DEFAULT_TYPE;
     const note = await createNote(typePath);
     if (!note) return;
-    if (filter.kind === "trash") setFilter({ kind: "all" });
+    if (filter.kind === "trash" || filter.kind === "external") {
+      setFilter({ kind: "all" });
+    }
     setSearch("");
     setSelectedNoteId(note.id);
   };
@@ -73,6 +77,22 @@ const Index = () => {
     setSelectedNoteId(id);
   };
 
+  const handleOpenExternalNotes = async () => {
+    const ids = await openExternalNotes();
+    if (!ids.length) return;
+    setFilter({ kind: "external" });
+    setSearch("");
+    setSelectedNoteId(ids[0]);
+  };
+
+  const handleMoveExternalToVault = async (id: string, typePath: string[]) => {
+    const moved = await moveExternalNoteToVault(id, typePath);
+    if (!moved) return;
+    setFilter({ kind: "type", path: typePath });
+    setSearch("");
+    setSelectedNoteId(id);
+  };
+
   if (vault.status === "pick-vault" || vault.status === "error") {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-grim-surface">
@@ -80,8 +100,8 @@ const Index = () => {
           <p className="text-5xl">📖</p>
           <h1 className="mt-4 text-xl font-semibold">Grimoire</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Your notes are plain markdown files in a folder — folders are
-            types. Point Grimoire at a folder to open your vault.
+            Your notes are plain markdown files in a folder — folders are types.
+            Point Grimoire at a folder to open your vault.
           </p>
           {vault.status === "error" && (
             <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -131,6 +151,7 @@ const Index = () => {
             onSearchChange={setSearch}
             onSelectNote={setSelectedNoteId}
             onCreateNote={() => void handleCreateNote()}
+            onOpenExternalNotes={() => void handleOpenExternalNotes()}
           />
         </ResizablePanel>
         <ResizableHandle className="w-px bg-border/60" />
@@ -141,7 +162,14 @@ const Index = () => {
             extraTypes={vault.extraTypes}
             schemas={vault.schemas}
             typeIcons={vault.typeIcons}
+            vaultLocation={vault.location}
+            isBusy={
+              selectedNote ? vault.busyNoteIds.has(selectedNote.id) : false
+            }
             onOpenNote={handleOpenNote}
+            onMoveExternalToVault={(id, typePath) =>
+              void handleMoveExternalToVault(id, typePath)
+            }
           />
         </ResizablePanel>
       </ResizablePanelGroup>

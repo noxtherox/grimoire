@@ -40,6 +40,7 @@ import {
   type Note,
   findNoteByTitle,
   getAllTypePaths,
+  isExternalNote,
   isTrashed,
   noteTitle,
   noteTypePath,
@@ -90,10 +91,18 @@ interface WrapTextareaProps {
 
 // Single-line look, but grows and wraps when the value is long. The invisible
 // replica sizes the grid cell; the textarea stretches to match it.
-function WrapTextarea({ value, placeholder, onChange, onBlur }: WrapTextareaProps) {
+function WrapTextarea({
+  value,
+  placeholder,
+  onChange,
+  onBlur,
+}: WrapTextareaProps) {
   return (
     <div className="grid">
-      <span aria-hidden className={`${wrapEditorClass} invisible [grid-area:1/1]`}>
+      <span
+        aria-hidden
+        className={`${wrapEditorClass} invisible [grid-area:1/1]`}
+      >
         {value || placeholder}{" "}
       </span>
       <textarea
@@ -212,7 +221,7 @@ function RelationValueEditor({
   const candidates = (
     def.relationTypeKey
       ? notesOfTypeKey(allNotes, def.relationTypeKey)
-      : allNotes.filter((note) => !isTrashed(note))
+      : allNotes.filter((note) => !isExternalNote(note) && !isTrashed(note))
   ).filter(
     (note) =>
       note.id !== currentNoteId &&
@@ -451,7 +460,12 @@ function DefForm({
         </>
       )}
       <div className="flex items-center gap-2">
-        <Button type="submit" size="sm" className="h-7 text-xs" disabled={!clean}>
+        <Button
+          type="submit"
+          size="sm"
+          className="h-7 text-xs"
+          disabled={!clean}
+        >
           {submitLabel}
         </Button>
         {onDelete && (
@@ -550,8 +564,8 @@ export function PropertiesSection({
                 </PopoverTrigger>
                 <PopoverContent className="w-56 p-3" align="start">
                   <p className="mb-2 text-xs text-muted-foreground">
-                    Edits apply to all <span className="font-medium">{topLabel}</span>{" "}
-                    notes.
+                    Edits apply to all{" "}
+                    <span className="font-medium">{topLabel}</span> notes.
                   </p>
                   <DefForm
                     initial={def}
@@ -575,7 +589,9 @@ export function PropertiesSection({
                   allNotes={allNotes}
                   currentNoteId={note.id}
                   onOpenNote={onOpenNote}
-                  onCommit={(value) => setNoteProperty(note.id, def.name, value)}
+                  onCommit={(value) =>
+                    setNoteProperty(note.id, def.name, value)
+                  }
                 />
               </div>
             </div>
@@ -588,7 +604,9 @@ export function PropertiesSection({
             <div key={key} className="flex items-start gap-1">
               <Popover
                 open={editing === `extra:${key}`}
-                onOpenChange={(open) => setEditing(open ? `extra:${key}` : null)}
+                onOpenChange={(open) =>
+                  setEditing(open ? `extra:${key}` : null)
+                }
               >
                 <PopoverTrigger asChild>
                   <button

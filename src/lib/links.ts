@@ -3,6 +3,7 @@ import { effectiveProperties, type PropertySchemas } from "@/lib/properties";
 import {
   type Note,
   getOutgoingLinkTitles,
+  isExternalNote,
   isTrashed,
   noteTitle,
   noteTypePath,
@@ -29,7 +30,10 @@ export function getOutgoingRelationTitles(
 }
 
 /** All titles this note links to: body wikilinks plus relation properties. */
-export function getOutgoingTitles(note: Note, schemas: PropertySchemas): string[] {
+export function getOutgoingTitles(
+  note: Note,
+  schemas: PropertySchemas,
+): string[] {
   return [
     ...getOutgoingLinkTitles(note.content),
     ...getOutgoingRelationTitles(note.content, noteTypePath(note), schemas),
@@ -48,7 +52,8 @@ export function getBacklinksGroupedByType(
   const targetTitle = noteTitle(target).toLowerCase();
   const groups = new Map<string, Note[]>();
   for (const note of notes) {
-    if (isTrashed(note) || note.id === target.id) continue;
+    if (isExternalNote(note) || isTrashed(note) || note.id === target.id)
+      continue;
     const linksToTarget = getOutgoingTitles(note, schemas).some(
       (title) => title.toLowerCase() === targetTitle,
     );
