@@ -1,5 +1,13 @@
 import { format, isToday, isYesterday } from "date-fns";
-import { Pin, Plus, Search, Trash2, Undo2 } from "lucide-react";
+import {
+  FolderSearch,
+  Pin,
+  Plus,
+  Search,
+  Trash2,
+  Undo2,
+  X,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   type Note,
+  isExternalNote,
   noteSnippet,
   noteTitle,
   noteTypePath,
@@ -19,9 +28,11 @@ import {
 } from "@/lib/note-utils";
 import type { NoteFilter } from "@/lib/filters";
 import {
+  closeExternalNote,
   deleteNoteForever,
   emptyTrash,
   restoreNote,
+  revealNoteInDesktop,
   toggleNotePinned,
   trashNote,
 } from "@/store/notes-store";
@@ -41,6 +52,7 @@ interface NoteListProps {
   onSearchChange: (value: string) => void;
   onSelectNote: (id: string) => void;
   onCreateNote: () => void;
+  onOpenExternalNotes: () => void;
 }
 
 export function NoteList({
@@ -51,14 +63,18 @@ export function NoteList({
   onSearchChange,
   onSelectNote,
   onCreateNote,
+  onOpenExternalNotes,
 }: NoteListProps) {
   const inTrash = filter.kind === "trash";
+  const inExternal = filter.kind === "external";
   const heading =
-    filter.kind === "all"
-      ? "All Notes"
-      : filter.kind === "trash"
-        ? "Trash"
-        : filter.path.join(" / ");
+    filter.kind === "type"
+      ? filter.path.join(" / ")
+      : filter.kind === "all"
+        ? "All Notes"
+        : filter.kind === "external"
+          ? "External Notes"
+          : "Trash";
 
   return (
     <div className="flex h-full flex-col bg-grim-surface">
@@ -80,8 +96,8 @@ export function NoteList({
             variant="ghost"
             size="icon"
             className="h-7 w-7"
-            title="New note (⌘N)"
-            onClick={onCreateNote}
+            title={inExternal ? "Open markdown file(s)" : "New note (⌘N)"}
+            onClick={inExternal ? onOpenExternalNotes : onCreateNote}
           >
             <Plus size={16} />
           </Button>
@@ -104,12 +120,17 @@ export function NoteList({
       <div className="flex-1 overflow-y-auto">
         {notes.length === 0 && (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {inTrash ? "Trash is empty." : "No notes here yet."}
+            {inTrash
+              ? "Trash is empty."
+              : inExternal
+                ? "Open markdown files from anywhere on your computer."
+                : "No notes here yet."}
           </p>
         )}
         {notes.map((note) => {
           const title = noteTitle(note);
           const snippet = noteSnippet(note);
+          const external = isExternalNote(note);
           const type = typeKey(noteTypePath(note));
           return (
             <ContextMenu key={note.id}>
@@ -127,7 +148,9 @@ export function NoteList({
                     {note.pinned && (
                       <Pin size={12} className="shrink-0 text-grim-accent" />
                     )}
-                    <span className="truncate text-sm font-medium">{title}</span>
+                    <span className="truncate text-sm font-medium">
+                      {title}
+                    </span>
                   </div>
                   {snippet && (
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
@@ -139,7 +162,9 @@ export function NoteList({
                       variant="secondary"
                       className="h-4 max-w-[60%] rounded px-1.5 text-[10px] font-normal"
                     >
-                      <span className="truncate">{type || "unfiled"}</span>
+                      <span className="truncate">
+                        {external ? "external" : type || "unfiled"}
+                      </span>
                     </Badge>
                     <span className="text-[11px] text-muted-foreground">
                       {formatNoteDate(note.updatedAt)}
@@ -148,7 +173,21 @@ export function NoteList({
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent>
-                {inTrash ? (
+                {external ? (
+                  <>
+                    <ContextMenuItem
+                      onClick={() => void revealNoteInDesktop(note.id)}
+                    >
+                      <FolderSearch size={14} className="mr-2" /> Reveal in
+                      desktop
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onClick={() => void closeExternalNote(note.id)}
+                    >
+                      <X size={14} className="mr-2" /> Close note
+                    </ContextMenuItem>
+                  </>
+                ) : inTrash ? (
                   <>
                     <ContextMenuItem onClick={() => void restoreNote(note.id)}>
                       <Undo2 size={14} className="mr-2" /> Restore

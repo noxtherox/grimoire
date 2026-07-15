@@ -1,5 +1,6 @@
 import {
   type Note,
+  isExternalNote,
   isTrashed,
   noteMatchesSearch,
   noteTypePath,
@@ -8,6 +9,7 @@ import {
 
 export type NoteFilter =
   | { kind: "all" }
+  | { kind: "external" }
   | { kind: "type"; path: string[] }
   | { kind: "trash" };
 
@@ -18,6 +20,8 @@ export function filterNotes(
   search: string,
 ): Note[] {
   const visible = notes.filter((note) => {
+    if (filter.kind === "external") return isExternalNote(note);
+    if (isExternalNote(note)) return false;
     if (filter.kind === "trash") return isTrashed(note);
     if (isTrashed(note)) return false;
     if (filter.kind === "type") {

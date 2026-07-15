@@ -25,6 +25,9 @@ interface TypePickerProps {
   /** Custom icon per type key — types without one get the folder glyph. */
   typeIcons: TypeIcons;
   onChange: (typePath: string[]) => void;
+  label?: string;
+  title?: string;
+  disabled?: boolean;
 }
 
 export function TypePicker({
@@ -32,6 +35,9 @@ export function TypePicker({
   existingTypePaths,
   typeIcons,
   onChange,
+  label,
+  title,
+  disabled = false,
 }: TypePickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -49,16 +55,23 @@ export function TypePicker({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={!disabled && open}
+      onOpenChange={(next) => !disabled && setOpen(next)}
+    >
       <PopoverTrigger asChild>
         <Button
           variant="outline"
           size="sm"
+          disabled={disabled}
           className="h-7 gap-1 rounded-full border-grim-accent/35 bg-grim-accent/5 px-2.5 text-xs font-medium text-grim-accent hover:bg-grim-accent/10 hover:text-grim-accent"
-          title="Type — the folder this note lives in (type / sub-type / sub-sub-type)"
+          title={
+            title ??
+            "Type — the folder this note lives in (type / sub-type / sub-sub-type)"
+          }
         >
           <TypeIcon icon={typeIcons[typeKey(value)]} size={12} />
-          {value.length ? value.join(" / ") : "unfiled"}
+          {label ?? (value.length ? value.join(" / ") : "unfiled")}
           <ChevronDown size={12} className="opacity-60" />
         </Button>
       </PopoverTrigger>
@@ -75,7 +88,11 @@ export function TypePicker({
               {existingTypePaths.map((path) => {
                 const key = typeKey(path);
                 return (
-                  <CommandItem key={key} value={key} onSelect={() => pick(path)}>
+                  <CommandItem
+                    key={key}
+                    value={key}
+                    onSelect={() => pick(path)}
+                  >
                     <TypeIcon
                       icon={typeIcons[key]}
                       size={13}

@@ -7,6 +7,7 @@ export default defineConfig(() => ({
   server: {
     host: "::",
     port: 8080,
+    allowedHosts: ["mac-mini-m4-nox.ibex-oratrice.ts.net"],
   },
   plugins: [dyadComponentTagger(), react()],
   resolve: {

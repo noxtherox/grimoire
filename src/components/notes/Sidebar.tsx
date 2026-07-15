@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Files,
   Notebook,
   Pencil,
   Plus,
@@ -15,6 +16,7 @@ import {
   type Note,
   type TypeNode,
   buildTypeTree,
+  isExternalNote,
   isTrashed,
   parseTypePath,
   typeKey,
@@ -162,8 +164,7 @@ function TypeTreeRows({
       {nodes.map((node) => {
         const key = typeKey(node.path);
         const isOpen = expanded.has(key);
-        const active =
-          filter.kind === "type" && typeKey(filter.path) === key;
+        const active = filter.kind === "type" && typeKey(filter.path) === key;
         return (
           <div key={key}>
             <ContextMenu>
@@ -241,7 +242,10 @@ export function Sidebar({
   onFilterChange,
 }: SidebarProps) {
   const tree = buildTypeTree(notes, extraTypes);
-  const activeCount = notes.filter((note) => !isTrashed(note)).length;
+  const activeCount = notes.filter(
+    (note) => !isExternalNote(note) && !isTrashed(note),
+  ).length;
+  const externalCount = notes.filter(isExternalNote).length;
   const trashCount = notes.filter((note) => isTrashed(note)).length;
 
   // null = not creating a type; otherwise the draft text in the inline input
@@ -352,6 +356,15 @@ export function Sidebar({
           label="All Notes"
           count={activeCount}
         />
+        {isDesktop && (
+          <SidebarRow
+            active={filter.kind === "external"}
+            onClick={() => onFilterChange({ kind: "external" })}
+            icon={<Files size={15} />}
+            label="External Notes"
+            count={externalCount}
+          />
+        )}
         <div className="flex items-center justify-between pb-1 pl-3 pr-2 pt-4">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-grim-sidebar-fg/40">
             Types

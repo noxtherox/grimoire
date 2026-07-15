@@ -172,6 +172,13 @@ export class BrowserVault implements VaultBackend {
     this.persist();
   }
 
+  async writeNew(path: string, content: string): Promise<void> {
+    if (path in this.files || path in this.assets) {
+      throw new Error(`File already exists: ${path}`);
+    }
+    await this.write(path, content);
+  }
+
   async move(from: string, to: string): Promise<void> {
     const file = this.files[from];
     if (!file) return;

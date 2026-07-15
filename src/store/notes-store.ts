@@ -1,6 +1,13 @@
 import { useSyncExternalStore } from "react";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import {
+  readTextFile,
+  remove as removeFsFile,
+  stat,
+  writeTextFile,
+} from "@tauri-apps/plugin-fs";
 import {
   DEFAULT_TYPE,
   MAX_TYPE_DEPTH,
@@ -8,9 +15,12 @@ import {
   type Note,
   fileStem,
   getAllTypePaths,
+  isExternalNote,
   isRemoteUrl,
   isTrashed,
   logicalPath,
+  normalizeFsPath,
+  noteAbsolutePath,
   noteTitle,
   noteTypePath,
   notesOfTypeKey,
@@ -39,6 +49,7 @@ import { DesktopVault } from "@/lib/vault/desktop";
 import { showError } from "@/utils/toast";
 
 const VAULT_PATH_KEY = "grimoire.vaultPath";
+const EXTERNAL_PATHS_KEY = "grimoire.externalPaths";
 const FLUSH_DELAY_MS = 500;
 
 export interface VaultState {
@@ -53,6 +64,8 @@ export interface VaultState {
   schemas: PropertySchemas;
   /** Custom lucide icon per type, keyed by full type key ("work/projects"). */
   typeIcons: TypeIcons;
+  /** Notes temporarily locked while a close or move operation commits. */
+  busyNoteIds: ReadonlySet<string>;
   error: string | null;
 }
 
@@ -64,6 +77,7 @@ let state: VaultState = {
   extraTypes: [],
   schemas: {},
   typeIcons: {},
+  busyNoteIds: new Set(),
   error: null,
 };
 
@@ -71,6 +85,10 @@ let backend: VaultBackend | null = null;
 let initialized = false;
 const listeners = new Set<() => void>();
 const pendingFlush = new Map<string, ReturnType<typeof setTimeout>>();
+const inFlightFlush = new Map<string, Promise<boolean>>();
+const externalPathRegistry = new Map<string, string>();
+let desktopCloseHookInstalled = false;
+let closingAfterFlush = false;
 
 function emit() {
   listeners.forEach((listener) => listener());
@@ -113,7 +131,7 @@ function loadPinnedPaths(): Set<string> {
 function savePinnedPaths() {
   try {
     const paths = state.notes
-      .filter((note) => note.pinned)
+      .filter((note) => note.pinned && !isExternalNote(note))
       .map((note) => logicalPath(note));
     localStorage.setItem(pinnedStorageKey(), JSON.stringify(paths));
   } catch {
@@ -121,11 +139,103 @@ function savePinnedPaths() {
   }
 }
 
+// ---- external notes, persisted as absolute paths across vaults -------------
+
+function loadExternalPaths(): string[] {
+  try {
+    const raw = localStorage.getItem(EXTERNAL_PATHS_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (path): path is string => typeof path === "string",
+        );
+      }
+    }
+  } catch {
+    // ignore malformed or unavailable storage
+  }
+  return [];
+}
+
+function saveExternalPaths() {
+  try {
+    localStorage.setItem(
+      EXTERNAL_PATHS_KEY,
+      JSON.stringify([...externalPathRegistry.values()]),
+    );
+  } catch {
+    // ignore unavailable storage
+  }
+}
+
+function registerExternalPath(path: string) {
+  externalPathRegistry.set(normalizeFsPath(path), path);
+}
+
+function forgetExternalPath(path: string) {
+  externalPathRegistry.delete(normalizeFsPath(path));
+}
+
+async function canonicalizeFsPath(path: string): Promise<string> {
+  if (!isTauri()) return path;
+  try {
+    return await invoke<string>("canonicalize_path", { path });
+  } catch {
+    return path;
+  }
+}
+
+function externalFileName(path: string): string {
+  return path.split(/[\\/]/).pop() || "Untitled.md";
+}
+
+async function readExternalNote(path: string): Promise<Note> {
+  const [content, info] = await Promise.all([readTextFile(path), stat(path)]);
+  return {
+    id: crypto.randomUUID(),
+    path: externalFileName(path),
+    externalPath: path,
+    content,
+    pinned: false,
+    updatedAt: (info.mtime ?? new Date()).toISOString(),
+  };
+}
+
+async function loadExternalNotes(): Promise<Note[]> {
+  for (const path of loadExternalPaths()) registerExternalPath(path);
+  const paths = [...externalPathRegistry.values()];
+  const distinctPaths = new Map<string, string>();
+  let registryChanged = false;
+  for (const path of paths) {
+    const canonicalPath = await canonicalizeFsPath(path);
+    distinctPaths.set(normalizeFsPath(canonicalPath), canonicalPath);
+    if (canonicalPath !== path) {
+      forgetExternalPath(path);
+      registerExternalPath(canonicalPath);
+      registryChanged = true;
+    }
+  }
+  if (registryChanged) saveExternalPaths();
+  const loaded = await Promise.all(
+    [...distinctPaths.values()].map(async (path) => {
+      try {
+        return await readExternalNote(path);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return loaded.filter((note): note is Note => note !== null);
+}
+
 // ---- vault lifecycle -------------------------------------------------------
 
 const SCHEMAS_PATH = ".grimoire/properties.json";
 
-async function loadSchemas(fromBackend: VaultBackend): Promise<PropertySchemas> {
+async function loadSchemas(
+  fromBackend: VaultBackend,
+): Promise<PropertySchemas> {
   try {
     const raw = await fromBackend.readText(SCHEMAS_PATH);
     const parsed = JSON.parse(raw) as PropertySchemas;
@@ -171,6 +281,7 @@ async function loadVault(nextBackend: VaultBackend) {
     extraTypes: [],
     schemas: {},
     typeIcons: {},
+    busyNoteIds: new Set(),
     error: null,
   });
   try {
@@ -181,18 +292,49 @@ async function loadVault(nextBackend: VaultBackend) {
       loadTypeIcons(nextBackend),
     ]);
     const pinned = loadPinnedPaths();
-    const notes: Note[] = files.map((file) => ({
+    const vaultNotes: Note[] = files.map((file) => ({
       id: crypto.randomUUID(),
       path: file.path,
       content: file.content,
       pinned: pinned.has(file.path),
       updatedAt: file.updatedAt,
     }));
+    let externalNotes =
+      nextBackend.kind === "desktop" ? await loadExternalNotes() : [];
+    if (externalNotes.length) {
+      const vaultPaths = new Set(
+        await Promise.all(
+          vaultNotes.map(async (note) =>
+            normalizeFsPath(
+              await canonicalizeFsPath(
+                noteAbsolutePath(note, nextBackend.location) ?? "",
+              ),
+            ),
+          ),
+        ),
+      );
+      const duplicates = externalNotes.filter((note) =>
+        vaultPaths.has(normalizeFsPath(note.externalPath as string)),
+      );
+      for (const note of duplicates) {
+        forgetExternalPath(note.externalPath as string);
+      }
+      if (duplicates.length) saveExternalPaths();
+      externalNotes = externalNotes.filter(
+        (note) => !vaultPaths.has(normalizeFsPath(note.externalPath as string)),
+      );
+    }
     // folders are types — except the assets folder, which holds images
     const extraTypes = dirs
       .filter((dir) => dir !== IMAGE_DIR && !dir.startsWith(`${IMAGE_DIR}/`))
       .map((dir) => dir.split("/").slice(0, MAX_TYPE_DEPTH));
-    setState({ status: "ready", notes, extraTypes, schemas, typeIcons });
+    setState({
+      status: "ready",
+      notes: [...externalNotes, ...vaultNotes],
+      extraTypes,
+      schemas,
+      typeIcons,
+    });
   } catch (error) {
     setState({ status: "error", error: String(error) });
   }
@@ -202,6 +344,7 @@ export function initStore() {
   if (initialized) return;
   initialized = true;
   if (isTauri()) {
+    installDesktopCloseHook();
     const saved = localStorage.getItem(VAULT_PATH_KEY);
     if (saved) {
       void loadVault(new DesktopVault(saved));
@@ -219,13 +362,14 @@ export async function chooseVaultFolder() {
     title: "Choose your Grimoire vault folder",
   });
   if (typeof folder !== "string" || !folder) return;
+  if (backend && !(await flushAll())) return;
   localStorage.setItem(VAULT_PATH_KEY, folder);
   await loadVault(new DesktopVault(folder));
 }
 
 export async function reloadVault() {
   if (!backend) return;
-  await flushAll();
+  if (!(await flushAll())) return;
   await loadVault(backend);
 }
 
@@ -234,7 +378,7 @@ export async function reloadVault() {
 function takenPaths(exceptId?: string): Set<string> {
   return new Set(
     state.notes
-      .filter((note) => note.id !== exceptId)
+      .filter((note) => note.id !== exceptId && !isExternalNote(note))
       .map((note) => note.path.toLowerCase()),
   );
 }
@@ -248,12 +392,58 @@ function uniquePath(dir: string, stem: string, exceptId?: string): string {
   }
 }
 
+async function writeUniquePathOnDisk(
+  dir: string,
+  stem: string,
+  content: string,
+  exceptId?: string,
+  currentPath?: string,
+): Promise<string> {
+  if (!backend) throw new Error("Vault is unavailable");
+  const taken = takenPaths(exceptId);
+  const prefix = dir ? `${dir}/` : "";
+  for (let n = 0; ; n++) {
+    const candidate = `${prefix}${stem}${n === 0 ? "" : ` ${n + 1}`}.md`;
+    if (taken.has(candidate.toLowerCase())) continue;
+    if (candidate === currentPath) return candidate;
+    try {
+      await backend.writeNew(candidate, content);
+      return candidate;
+    } catch (error) {
+      // Another process may have claimed the candidate after our last reload.
+      if (await backend.exists(candidate)) continue;
+      throw error;
+    }
+  }
+}
+
+function isSafeTypePath(typePath: string[]): boolean {
+  return (
+    typePath.length > 0 &&
+    typePath.length <= MAX_TYPE_DEPTH &&
+    typePath.every(
+      (segment) =>
+        segment.length > 0 &&
+        segment !== "." &&
+        segment !== ".." &&
+        !/[\\/\0]/.test(segment),
+    )
+  );
+}
+
 function updateNote(id: string, patch: Partial<Note>) {
   setState({
     notes: state.notes.map((note) =>
       note.id === id ? { ...note, ...patch } : note,
     ),
   });
+}
+
+function setNoteBusy(id: string, busy: boolean) {
+  const busyNoteIds = new Set(state.busyNoteIds);
+  if (busy) busyNoteIds.add(id);
+  else busyNoteIds.delete(id);
+  setState({ busyNoteIds });
 }
 
 function reportError(action: string, error: unknown) {
@@ -264,6 +454,7 @@ function reportError(action: string, error: unknown) {
 // ---- content editing with debounced file sync ------------------------------
 
 export function updateNoteContent(id: string, content: string) {
+  if (closingAfterFlush || state.busyNoteIds.has(id)) return;
   updateNote(id, { content, updatedAt: new Date().toISOString() });
   const existing = pendingFlush.get(id);
   if (existing) clearTimeout(existing);
@@ -273,41 +464,233 @@ export function updateNoteContent(id: string, content: string) {
   );
 }
 
-/** Writes pending content to disk, renaming the file if the title changed. */
-async function flushNote(id: string) {
-  pendingFlush.delete(id);
+/** Writes the freshest content to disk after any earlier write for this note. */
+async function persistNote(id: string): Promise<boolean> {
   const note = state.notes.find((candidate) => candidate.id === id);
-  if (!note || !backend) return;
+  if (!note) return true;
   try {
+    if (note.externalPath) {
+      await writeTextFile(note.externalPath, note.content);
+      return true;
+    }
+    if (!backend) return false;
     let path = note.path;
     const desiredStem = sanitizeFileStem(noteTitle(note));
     if (desiredStem !== fileStem(note.path) && !isTrashed(note)) {
       const dir = note.path.split("/").slice(0, -1).join("/");
-      const target = uniquePath(dir, desiredStem, id);
-      await backend.move(note.path, target);
-      path = target;
-      updateNote(id, { path });
-      savePinnedPaths();
+      const target = await writeUniquePathOnDisk(
+        dir,
+        desiredStem,
+        note.content,
+        id,
+        note.path,
+      );
+      if (target !== note.path) {
+        try {
+          await backend.removeFile(note.path);
+        } catch (error) {
+          await backend.removeFile(target).catch(() => {});
+          throw error;
+        }
+        path = target;
+        updateNote(id, { path });
+        savePinnedPaths();
+      }
     }
     await backend.write(path, note.content);
+    return true;
   } catch (error) {
     reportError("save note", error);
+    return false;
   }
 }
 
-async function flushAll() {
-  const ids = [...pendingFlush.keys()];
-  for (const id of ids) {
+async function flushNote(id: string): Promise<boolean> {
+  pendingFlush.delete(id);
+  const previous = inFlightFlush.get(id) ?? Promise.resolve(true);
+  const operation = previous.then(() => persistNote(id));
+  inFlightFlush.set(id, operation);
+  const saved = await operation;
+  if (inFlightFlush.get(id) === operation) inFlightFlush.delete(id);
+  return saved;
+}
+
+async function flushUntilIdle(id: string): Promise<boolean> {
+  do {
     const timer = pendingFlush.get(id);
     if (timer) clearTimeout(timer);
-    await flushNote(id);
-  }
+    if (!(await flushNote(id))) return false;
+  } while (pendingFlush.has(id) || inFlightFlush.has(id));
+  return true;
 }
 
-if (typeof window !== "undefined") {
+async function flushAll(): Promise<boolean> {
+  let saved = true;
+  do {
+    const ids = new Set([...pendingFlush.keys(), ...inFlightFlush.keys()]);
+    for (const id of ids) {
+      if (!(await flushUntilIdle(id))) saved = false;
+    }
+  } while (pendingFlush.size > 0 || inFlightFlush.size > 0);
+  return saved;
+}
+
+function installDesktopCloseHook() {
+  if (desktopCloseHookInstalled) return;
+  desktopCloseHookInstalled = true;
+  const appWindow = getCurrentWindow();
+  void appWindow
+    .onCloseRequested(async (event) => {
+      if (closingAfterFlush) return;
+      event.preventDefault();
+      closingAfterFlush = true;
+      if (!(await flushAll())) {
+        closingAfterFlush = false;
+        return;
+      }
+      await appWindow.close();
+    })
+    .catch((error) => reportError("install safe close handler", error));
+}
+
+if (typeof window !== "undefined" && !isTauri()) {
   window.addEventListener("beforeunload", () => {
     void flushAll();
   });
+}
+
+// ---- external note operations ---------------------------------------------
+
+/** Opens one or more markdown files without assigning them a vault type. */
+export async function openExternalNotes(): Promise<string[]> {
+  if (!isTauri()) return [];
+  const picked = await openDialog({
+    multiple: true,
+    title: "Open external markdown notes",
+    filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+  });
+  if (!picked) return [];
+  const paths = typeof picked === "string" ? [picked] : picked;
+  const openedIds: string[] = [];
+  const newNotes: Note[] = [];
+
+  const distinctPaths = new Map<string, string>();
+  for (const path of await Promise.all(paths.map(canonicalizeFsPath))) {
+    distinctPaths.set(normalizeFsPath(path), path);
+  }
+  const vaultPaths = new Set(
+    await Promise.all(
+      state.notes
+        .filter((note) => !isExternalNote(note))
+        .map(async (note) =>
+          normalizeFsPath(
+            await canonicalizeFsPath(
+              noteAbsolutePath(note, state.location) ?? "",
+            ),
+          ),
+        ),
+    ),
+  );
+  for (const [normalizedPath, path] of distinctPaths) {
+    const existingExternal = state.notes.find(
+      (note) =>
+        !!note.externalPath &&
+        normalizeFsPath(note.externalPath) === normalizedPath,
+    );
+    if (existingExternal) {
+      registerExternalPath(path);
+      openedIds.push(existingExternal.id);
+      continue;
+    }
+    if (vaultPaths.has(normalizedPath)) continue;
+    try {
+      const note = await readExternalNote(path);
+      registerExternalPath(path);
+      newNotes.push(note);
+      openedIds.push(note.id);
+    } catch (error) {
+      reportError(`open ${externalFileName(path)}`, error);
+    }
+  }
+
+  if (newNotes.length) {
+    setState({ notes: [...newNotes, ...state.notes] });
+  }
+  if (openedIds.length) saveExternalPaths();
+  return openedIds;
+}
+
+/** Stops tracking an external note without deleting the source file. */
+export async function closeExternalNote(id: string): Promise<void> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!note || !isExternalNote(note) || state.busyNoteIds.has(id)) return;
+  setNoteBusy(id, true);
+  try {
+    if (!(await flushUntilIdle(id))) return;
+    const current = state.notes.find((candidate) => candidate.id === id);
+    if (!current?.externalPath) return;
+    setState({ notes: state.notes.filter((candidate) => candidate.id !== id) });
+    forgetExternalPath(current.externalPath);
+    saveExternalPaths();
+  } finally {
+    setNoteBusy(id, false);
+  }
+}
+
+/** Moves an external file into the selected vault type and removes the source. */
+export async function moveExternalNoteToVault(
+  id: string,
+  typePath: string[],
+): Promise<boolean> {
+  if (!backend || !isSafeTypePath(typePath) || state.busyNoteIds.has(id)) {
+    return false;
+  }
+  const initial = state.notes.find((candidate) => candidate.id === id);
+  if (!initial?.externalPath) return false;
+  setNoteBusy(id, true);
+  try {
+    if (!(await flushUntilIdle(id))) return false;
+    const note = state.notes.find((candidate) => candidate.id === id);
+    if (!note?.externalPath) return false;
+    const existedKeys = existingTypeKeys();
+    let target: string | null = null;
+    try {
+      target = await writeUniquePathOnDisk(
+        typeKey(typePath),
+        fileStem(note.externalPath),
+        note.content,
+        id,
+      );
+      try {
+        await removeFsFile(note.externalPath);
+      } catch (error) {
+        await backend.removeFile(target).catch(() => {});
+        throw error;
+      }
+      updateNote(id, { path: target, externalPath: undefined });
+      forgetExternalPath(note.externalPath);
+      saveExternalPaths();
+      suggestIconsForNewType(typePath, existedKeys);
+      return true;
+    } catch (error) {
+      reportError("move external note to vault", error);
+      return false;
+    }
+  } finally {
+    setNoteBusy(id, false);
+  }
+}
+
+export async function revealNoteInDesktop(id: string): Promise<void> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!note) return;
+  const path = noteAbsolutePath(note, state.location);
+  if (!path || !isTauri()) return;
+  try {
+    await invoke("reveal_in_file_manager", { path });
+  } catch (error) {
+    reportError("reveal note in desktop", error);
+  }
 }
 
 // ---- images ------------------------------------------------------------------
@@ -532,9 +915,7 @@ async function suggestIconsForNewType(
 
 function existingTypeKeys(): Set<string> {
   return new Set(
-    getAllTypePaths(state.notes, state.extraTypes).map((path) =>
-      typeKey(path),
-    ),
+    getAllTypePaths(state.notes, state.extraTypes).map((path) => typeKey(path)),
   );
 }
 
@@ -722,7 +1103,8 @@ export async function setNoteType(id: string, typePath: string[]) {
   if (!backend) return;
   await flushAll();
   const note = state.notes.find((candidate) => candidate.id === id);
-  if (!note || isTrashed(note) || !typePath.length) return;
+  if (!note || isExternalNote(note) || isTrashed(note) || !typePath.length)
+    return;
   if (typeKey(noteTypePath(note)) === typeKey(typePath)) return;
   // the move may create the type — capture what existed before to only
   // suggest icons for genuinely new type levels
@@ -740,7 +1122,7 @@ export async function setNoteType(id: string, typePath: string[]) {
 
 export function toggleNotePinned(id: string) {
   const note = state.notes.find((candidate) => candidate.id === id);
-  if (!note) return;
+  if (!note || isExternalNote(note)) return;
   updateNote(id, { pinned: !note.pinned });
   savePinnedPaths();
 }
@@ -749,7 +1131,7 @@ export async function trashNote(id: string) {
   if (!backend) return;
   await flushAll();
   const note = state.notes.find((candidate) => candidate.id === id);
-  if (!note || isTrashed(note)) return;
+  if (!note || isExternalNote(note) || isTrashed(note)) return;
   const dir = [TRASH_DIR, ...noteTypePath(note)].join("/");
   const target = uniquePath(dir, fileStem(note.path), id);
   try {
@@ -779,7 +1161,7 @@ export async function restoreNote(id: string) {
 export async function deleteNoteForever(id: string) {
   if (!backend) return;
   const note = state.notes.find((candidate) => candidate.id === id);
-  if (!note) return;
+  if (!note || isExternalNote(note)) return;
   try {
     await backend.removeFile(note.path);
     setState({ notes: state.notes.filter((candidate) => candidate.id !== id) });

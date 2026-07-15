@@ -13,6 +13,8 @@ export const DEFAULT_TYPE: string[] = ["inbox"];
 export interface Note {
   id: string; // stable for the session; the path may change on rename/move
   path: string;
+  /** Absolute source path when the note is open outside the vault. */
+  externalPath?: string;
   content: string;
   pinned: boolean;
   updatedAt: string;
@@ -26,6 +28,31 @@ export const WIKILINK_REGEX = /\[\[([^[\]]+)\]\]/g;
  * the same convention Obsidian uses.
  */
 export const IMAGE_MD_REGEX = /!\[([^\]]*)\]\(([^()\s]+)\)/g;
+
+export function isExternalNote(note: Note): boolean {
+  return !!note.externalPath;
+}
+
+/** Normalizes separators and Windows casing for reliable path comparisons. */
+export function normalizeFsPath(path: string): string {
+  const withSlashes = path.replace(/\\/g, "/");
+  const isUnc = withSlashes.startsWith("//");
+  let normalized = withSlashes.replace(/\/{2,}/g, "/").replace(/\/$/, "");
+  if (isUnc) normalized = `/${normalized}`;
+  const looksWindows =
+    isUnc || /^[a-z]:\//i.test(normalized) || path.includes("\\");
+  return looksWindows ? normalized.toLowerCase() : normalized;
+}
+
+/** Absolute filesystem path when available (desktop only). */
+export function noteAbsolutePath(
+  note: Note,
+  vaultLocation: string | null,
+): string | null {
+  if (note.externalPath) return note.externalPath;
+  if (!vaultLocation) return null;
+  return `${vaultLocation.replace(/[\\/]$/, "")}/${note.path}`;
+}
 
 export function isRemoteUrl(path: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(path);
@@ -50,7 +77,7 @@ export function formatImageMarkdown(
 }
 
 export function isTrashed(note: Note): boolean {
-  return note.path.startsWith(`${TRASH_DIR}/`);
+  return !isExternalNote(note) && note.path.startsWith(`${TRASH_DIR}/`);
 }
 
 /** Vault-relative path ignoring the .trash prefix. */
@@ -60,6 +87,7 @@ export function logicalPath(note: Note): string {
 
 /** Folder segments of the note, clamped to the max type depth. */
 export function noteTypePath(note: Note): string[] {
+  if (isExternalNote(note)) return [];
   const segments = logicalPath(note).split("/");
   return segments.slice(0, -1).slice(0, MAX_TYPE_DEPTH);
 }
@@ -71,14 +99,14 @@ export function typeKey(typePath: string[]): string {
 /** Non-trashed notes of the given type, including its sub-types. */
 export function notesOfTypeKey(notes: Note[], ownerKey: string): Note[] {
   return notes.filter((note) => {
-    if (isTrashed(note)) return false;
+    if (isExternalNote(note) || isTrashed(note)) return false;
     const key = typeKey(noteTypePath(note));
     return key === ownerKey || key.startsWith(`${ownerKey}/`);
   });
 }
 
 export function fileStem(path: string): string {
-  const name = path.split("/").pop() ?? "";
+  const name = path.split(/[\\/]/).pop() ?? "";
   return name.replace(/\.md$/i, "");
 }
 
@@ -121,7 +149,10 @@ export function findNoteByTitle(
 ): Note | undefined {
   const needle = title.trim().toLowerCase();
   return notes.find(
-    (note) => !isTrashed(note) && noteTitle(note).toLowerCase() === needle,
+    (note) =>
+      !isExternalNote(note) &&
+      !isTrashed(note) &&
+      noteTitle(note).toLowerCase() === needle,
   );
 }
 
@@ -166,7 +197,7 @@ export function buildTypeTree(
     addPath(typePath.slice(0, MAX_TYPE_DEPTH), 0);
   }
   for (const note of notes) {
-    if (isTrashed(note)) continue;
+    if (isExternalNote(note) || isTrashed(note)) continue;
     addPath(noteTypePath(note), 1);
   }
   return roots;
@@ -187,7 +218,7 @@ export function getAllTypePaths(
   };
   for (const typePath of extraTypePaths) add(typePath);
   for (const note of notes) {
-    if (!isTrashed(note)) add(noteTypePath(note));
+    if (!isExternalNote(note) && !isTrashed(note)) add(noteTypePath(note));
   }
   return [...seen.values()].sort((a, b) =>
     typeKey(a).localeCompare(typeKey(b)),
@@ -205,7 +236,13 @@ export function parseTypePath(input: string): string[] {
         .replace(/[\\:*?"<>|#[\]]/g, "")
         .replace(/\s+/g, "-"),
     )
-    .filter((segment) => segment.length > 0 && segment !== TRASH_DIR)
+    .filter(
+      (segment) =>
+        segment.length > 0 &&
+        segment !== "." &&
+        segment !== ".." &&
+        segment !== TRASH_DIR,
+    )
     .slice(0, MAX_TYPE_DEPTH);
 }
 
@@ -226,6 +263,7 @@ export function noteMatchesSearch(note: Note, query: string): boolean {
   if (!q) return true;
   return (
     note.content.toLowerCase().includes(q) ||
+    note.externalPath?.toLowerCase().includes(q) ||
     typeKey(noteTypePath(note)).toLowerCase().includes(q) ||
     fileStem(note.path).toLowerCase().includes(q)
   );
