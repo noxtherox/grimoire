@@ -8,10 +8,9 @@ import {
 } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
-import {
-  autocompletion,
-  type CompletionContext,
-  type CompletionResult,
+import type {
+  CompletionContext,
+  CompletionResult,
 } from "@codemirror/autocomplete";
 import { WIKILINK_REGEX } from "@/lib/note-utils";
 
@@ -198,9 +197,9 @@ export const inlineTagExtension = (() => {
   );
 })();
 
-/** Autocomplete note titles after typing `[[`. */
-export function wikilinkAutocomplete(getTitles: () => string[]) {
-  const source = (context: CompletionContext): CompletionResult | null => {
+/** Completion source that suggests note titles after typing `[[`. */
+export function wikilinkCompletionSource(getTitles: () => string[]) {
+  return (context: CompletionContext): CompletionResult | null => {
     const match = context.matchBefore(/\[\[([^[\]]*)$/);
     if (!match) return null;
     const from = match.from + 2;
@@ -222,5 +221,4 @@ export function wikilinkAutocomplete(getTitles: () => string[]) {
       validFor: /^[^[\]]*$/,
     };
   };
-  return autocompletion({ override: [source], icons: false });
 }
