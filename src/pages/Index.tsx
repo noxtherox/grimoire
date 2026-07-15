@@ -6,6 +6,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { GrimoireLogo } from "@/components/GrimoireLogo";
 import { Sidebar } from "@/components/notes/Sidebar";
 import { NoteList } from "@/components/notes/NoteList";
 import { EditorPane } from "@/components/notes/EditorPane";
@@ -97,7 +98,7 @@ const Index = () => {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-grim-surface">
         <div className="max-w-sm text-center">
-          <p className="text-5xl">📖</p>
+          <GrimoireLogo size={72} className="mx-auto" />
           <h1 className="mt-4 text-xl font-semibold">Grimoire</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Your notes are plain markdown files in a folder — folders are types.

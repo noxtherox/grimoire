@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { GrimoireLogo } from "@/components/GrimoireLogo";
 import {
   type Note,
   type TypeNode,
@@ -337,8 +338,9 @@ export function Sidebar({
   return (
     <div className="flex h-full flex-col bg-grim-sidebar pt-4">
       <div className="flex items-center justify-between px-4 pb-3">
-        <h1 className="text-sm font-semibold tracking-wide text-grim-sidebar-fg/90">
-          📖 Grimoire
+        <h1 className="flex items-center gap-1.5 text-sm font-semibold tracking-wide text-grim-sidebar-fg/90">
+          <GrimoireLogo variant="dark" size={20} />
+          Grimoire
         </h1>
         <button
           onClick={() => void reloadVault()}
