@@ -4,10 +4,12 @@ import {
   type Note,
   buildTypeTree,
   getAllTypePaths,
+  isAbsoluteFsPath,
   isExternalNote,
   normalizeFsPath,
   noteAbsolutePath,
   parseTypePath,
+  resolveExternalAssetPath,
 } from "./note-utils";
 
 const vaultNote: Note = {
@@ -49,6 +51,39 @@ describe("external notes", () => {
     expect(noteAbsolutePath(vaultNote, "/vault/")).toBe(
       "/vault/work/Vault note.md",
     );
+  });
+
+  it("resolves image references relative to the external note's folder", () => {
+    const notePath = "/Users/test/Docs/Review me.md";
+    expect(resolveExternalAssetPath(notePath, "assets/shot.png")).toBe(
+      "/Users/test/Docs/assets/shot.png",
+    );
+    expect(resolveExternalAssetPath(notePath, "./images/a.png")).toBe(
+      "/Users/test/Docs/images/a.png",
+    );
+    expect(resolveExternalAssetPath(notePath, "../shared/b.png")).toBe(
+      "/Users/test/shared/b.png",
+    );
+    expect(resolveExternalAssetPath(notePath, "/abs/c.png")).toBe(
+      "/abs/c.png",
+    );
+    expect(resolveExternalAssetPath(notePath, ".")).toBe("/Users/test/Docs");
+    expect(
+      resolveExternalAssetPath("C:\\Docs\\Note.md", "assets\\d.png"),
+    ).toBe("C:/Docs/assets/d.png");
+    // `..` never climbs past the filesystem root
+    expect(resolveExternalAssetPath("/root/Note.md", "../../../e.png")).toBe(
+      "/e.png",
+    );
+  });
+
+  it("detects absolute filesystem paths across platforms", () => {
+    expect(isAbsoluteFsPath("/Users/test/pic.png")).toBe(true);
+    expect(isAbsoluteFsPath("C:\\Users\\pic.png")).toBe(true);
+    expect(isAbsoluteFsPath("c:/users/pic.png")).toBe(true);
+    expect(isAbsoluteFsPath("\\\\server\\share\\pic.png")).toBe(true);
+    expect(isAbsoluteFsPath("assets/pic.png")).toBe(false);
+    expect(isAbsoluteFsPath("./pic.png")).toBe(false);
   });
 
   it("normalizes Windows paths and rejects traversal type segments", () => {

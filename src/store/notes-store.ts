@@ -3,9 +3,13 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
+  exists as fsExists,
+  mkdir as fsMkdir,
+  readFile as readFsFile,
   readTextFile,
   remove as removeFsFile,
   stat,
+  writeFile as writeFsFile,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import {
@@ -15,12 +19,14 @@ import {
   type Note,
   fileStem,
   getAllTypePaths,
+  isAbsoluteFsPath,
   isExternalNote,
   isRemoteUrl,
   isTrashed,
   logicalPath,
   normalizeFsPath,
   noteAbsolutePath,
+  resolveExternalAssetPath,
   noteTitle,
   noteTypePath,
   notesOfTypeKey,
@@ -727,48 +733,114 @@ function clearImageUrlCache() {
   imageUrlCache.clear();
 }
 
+function safeDecodeUri(path: string): string {
+  try {
+    return decodeURI(path);
+  } catch {
+    return path;
+  }
+}
+
+function externalNoteById(noteId: string | undefined): Note | undefined {
+  if (!noteId) return undefined;
+  const note = state.notes.find((candidate) => candidate.id === noteId);
+  return note && isExternalNote(note) ? note : undefined;
+}
+
 /**
- * Resolves a vault-relative image path to a displayable URL (a blob URL backed
- * by the vault file). Remote URLs pass through untouched.
+ * Resolves an image path from a note's markdown to a displayable URL (a blob
+ * URL backed by the file). Remote URLs pass through untouched. Vault notes
+ * resolve vault-relative paths; external notes resolve relative to their own
+ * folder on disk (falling back to the vault for legacy pasted images).
  */
-export function getImageUrl(path: string): Promise<string | null> {
+export function getImageUrl(
+  path: string,
+  noteId?: string,
+): Promise<string | null> {
   if (isRemoteUrl(path)) return Promise.resolve(path);
-  let cached = imageUrlCache.get(path);
+  const decoded = safeDecodeUri(path);
+  const externalNote = externalNoteById(noteId);
+  const externalAbsPath =
+    externalNote?.externalPath && isTauri()
+      ? resolveExternalAssetPath(externalNote.externalPath, decoded)
+      : isAbsoluteFsPath(decoded) && isTauri()
+        ? decoded
+        : null;
+  const cacheKey = externalAbsPath ? `abs:${externalAbsPath}` : decoded;
+  let cached = imageUrlCache.get(cacheKey);
   if (!cached) {
     cached = (async () => {
-      if (!backend) return null;
-      try {
-        const bytes = await backend.readBinary(decodeURI(path));
-        const ext = path.split(".").pop()?.toLowerCase() ?? "";
-        const type = MIME_BY_EXT[ext] ?? "application/octet-stream";
-        return URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
-      } catch {
-        return null;
-      }
+      const bytes = await (async () => {
+        if (externalAbsPath) {
+          try {
+            return await readFsFile(externalAbsPath);
+          } catch {
+            // fall through: images pasted before external-note support
+            // landed in the vault's assets folder
+          }
+        }
+        if (!backend) return null;
+        try {
+          return await backend.readBinary(decoded);
+        } catch {
+          return null;
+        }
+      })();
+      if (!bytes) return null;
+      const ext = decoded.split(".").pop()?.toLowerCase() ?? "";
+      const type = MIME_BY_EXT[ext] ?? "application/octet-stream";
+      return URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
     })();
-    imageUrlCache.set(path, cached);
+    imageUrlCache.set(cacheKey, cached);
   }
   return cached;
 }
 
 /**
- * Saves pasted/dropped image bytes into the vault's assets folder and returns
- * the vault-relative path to reference from markdown, or null on failure.
+ * Saves pasted/dropped image bytes into an assets folder and returns the
+ * relative path to reference from markdown, or null on failure. Vault notes
+ * use the vault's assets folder; external notes get an assets folder next to
+ * their own file, so the markdown stays valid outside Grimoire.
  */
 export async function savePastedImage(
   bytes: Uint8Array,
   mime: string,
+  noteId?: string,
 ): Promise<string | null> {
-  if (!backend) return null;
   const ext = EXT_BY_MIME[mime] ?? "png";
   const stamp = new Date()
     .toISOString()
     .replace(/[-:]/g, "")
     .replace("T", "-")
     .slice(0, 15);
+  const uniqueName = (n: number) =>
+    `${IMAGE_DIR}/pasted-${stamp}${n === 0 ? "" : `-${n}`}.${ext}`;
+
+  const externalNote = externalNoteById(noteId);
+  if (externalNote?.externalPath && isTauri()) {
+    const noteDir = resolveExternalAssetPath(externalNote.externalPath, ".");
+    try {
+      const assetsDir = `${noteDir}/${IMAGE_DIR}`;
+      if (!(await fsExists(assetsDir))) {
+        await fsMkdir(assetsDir, { recursive: true });
+      }
+      let relPath = "";
+      for (let n = 0; ; n++) {
+        relPath = uniqueName(n);
+        if (!(await fsExists(`${noteDir}/${relPath}`))) break;
+      }
+      await writeFsFile(`${noteDir}/${relPath}`, bytes);
+      return relPath;
+    } catch (error) {
+      reportError("save image", error);
+      return null;
+    }
+  }
+
+  if (!backend) return null;
   let path = "";
   for (let n = 0; ; n++) {
-    path = `${IMAGE_DIR}/pasted-${stamp}${n === 0 ? "" : `-${n}`}.${ext}`;
+    path = uniqueName(n);
     if (!(await backend.exists(path))) break;
   }
   try {
