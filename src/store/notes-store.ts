@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -570,7 +571,14 @@ export async function openExternalNotes(): Promise<string[]> {
     filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
   });
   if (!picked) return [];
-  const paths = typeof picked === "string" ? [picked] : picked;
+  return openExternalNotesByPaths(typeof picked === "string" ? [picked] : picked);
+}
+
+/** Opens markdown files by absolute path (file picker or OS "Open with"). */
+export async function openExternalNotesByPaths(
+  paths: string[],
+): Promise<string[]> {
+  if (!isTauri() || !paths.length) return [];
   const openedIds: string[] = [];
   const newNotes: Note[] = [];
 
@@ -618,6 +626,34 @@ export async function openExternalNotes(): Promise<string[]> {
   }
   if (openedIds.length) saveExternalPaths();
   return openedIds;
+}
+
+/**
+ * Opens markdown files the OS asked Grimoire to open (file associations),
+ * both those queued before the app was ready and later "Open with" requests.
+ * Returns an unsubscribe function.
+ */
+export function watchOsOpenedFiles(
+  onOpened: (ids: string[]) => void,
+): () => void {
+  if (!isTauri()) return () => {};
+  let active = true;
+  const drain = async () => {
+    try {
+      const paths = await invoke<string[]>("take_pending_open_files");
+      if (!active || !paths.length) return;
+      const ids = await openExternalNotesByPaths(paths);
+      if (active && ids.length) onOpened(ids);
+    } catch (error) {
+      reportError("open notes from the system", error);
+    }
+  };
+  void drain();
+  const unlisten = listen("grimoire://open-files", () => void drain());
+  return () => {
+    active = false;
+    void unlisten.then((dispose) => dispose());
+  };
 }
 
 /** Stops tracking an external note without deleting the source file. */
