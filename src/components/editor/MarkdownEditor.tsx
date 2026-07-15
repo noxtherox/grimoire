@@ -77,8 +77,10 @@ export function MarkdownEditor({
           onFollow: (title) => callbacksRef.current.onFollowLink(title),
         }),
         wikilinkAutocomplete(() => callbacksRef.current.getLinkableTitles()),
-        imagePreviewExtension(getImageUrl),
-        imagePasteExtension(savePastedImage),
+        imagePreviewExtension((path) => getImageUrl(path, noteId)),
+        imagePasteExtension((bytes, mime) =>
+          savePastedImage(bytes, mime, noteId),
+        ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             callbacksRef.current.onChange(update.state.doc.toString());

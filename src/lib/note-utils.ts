@@ -58,6 +58,33 @@ export function isRemoteUrl(path: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(path);
 }
 
+export function isAbsoluteFsPath(path: string): boolean {
+  return /^(?:[a-z]:[\\/]|[\\/])/i.test(path);
+}
+
+/**
+ * Resolves an image reference from an external note's markdown to an absolute
+ * filesystem path. Relative references resolve against the note file's own
+ * folder (with `.`/`..` folded); absolute references pass through unchanged.
+ */
+export function resolveExternalAssetPath(
+  externalNotePath: string,
+  imagePath: string,
+): string {
+  if (isAbsoluteFsPath(imagePath)) return imagePath;
+  const base = externalNotePath.split(/[\\/]/);
+  base.pop(); // drop the note's file name, keeping its folder
+  for (const segment of imagePath.split(/[\\/]/)) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (base.length > 1) base.pop();
+    } else {
+      base.push(segment);
+    }
+  }
+  return base.join("/");
+}
+
 /** Splits `alt|320` into the plain alt text and the width, if present. */
 export function parseImageAlt(alt: string): {
   alt: string;
