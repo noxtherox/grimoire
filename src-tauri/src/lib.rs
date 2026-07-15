@@ -1,6 +1,30 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+use std::sync::Mutex;
+
+/// Markdown files the OS asked us to open, waiting for the frontend to
+/// drain them (covers files opened before the webview is ready).
+struct PendingOpenFiles(Mutex<Vec<String>>);
+
+fn is_markdown_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some(ext) if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+    )
+}
+
+/// File-association launch arguments (Windows/Linux pass opened files as argv).
+fn markdown_paths_from_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
+    args.into_iter()
+        .filter(|arg| is_markdown_path(Path::new(arg)))
+        .collect()
+}
+
+#[tauri::command]
+fn take_pending_open_files(pending: tauri::State<'_, PendingOpenFiles>) -> Vec<String> {
+    std::mem::take(&mut *pending.0.lock().unwrap())
+}
 
 fn write_new_vault_file_impl(
     root: &Path,
@@ -98,10 +122,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(PendingOpenFiles(Mutex::new(markdown_paths_from_args(
+            std::env::args().skip(1),
+        ))))
         .invoke_handler(tauri::generate_handler![
             reveal_in_file_manager,
             write_new_vault_file,
-            canonicalize_path
+            canonicalize_path,
+            take_pending_open_files
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -113,13 +141,31 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            // macOS delivers Finder/"Open With" files as an event instead of argv.
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let tauri::RunEvent::Opened { urls } = &_event {
+                use tauri::{Emitter, Manager};
+                let paths: Vec<String> = urls
+                    .iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .filter(|path| is_markdown_path(path))
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                if !paths.is_empty() {
+                    let pending = _app.state::<PendingOpenFiles>();
+                    pending.0.lock().unwrap().extend(paths);
+                    let _ = _app.emit("grimoire://open-files", ());
+                }
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::write_new_vault_file_impl;
+    use super::{markdown_paths_from_args, write_new_vault_file_impl};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -130,6 +176,25 @@ mod tests {
             .expect("clock should follow the Unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("grimoire-{name}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn keeps_only_markdown_launch_arguments() {
+        let args = [
+            "/notes/Plan.md",
+            "/notes/README.MARKDOWN",
+            "--flag",
+            "/notes/photo.png",
+            "/notes/md",
+        ]
+        .map(String::from);
+        assert_eq!(
+            markdown_paths_from_args(args),
+            vec![
+                "/notes/Plan.md".to_string(),
+                "/notes/README.MARKDOWN".to_string()
+            ]
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ import {
   moveExternalNoteToVault,
   openExternalNotes,
   useVault,
+  watchOsOpenedFiles,
 } from "@/store/notes-store";
 import { filterNotes, type NoteFilter } from "@/lib/filters";
 import { DEFAULT_TYPE } from "@/lib/note-utils";
@@ -29,6 +30,16 @@ const Index = () => {
   useEffect(() => {
     initStore();
   }, []);
+
+  // Markdown files opened via the OS (double-click / "Open with" Grimoire)
+  useEffect(() => {
+    if (vault.status !== "ready") return;
+    return watchOsOpenedFiles((ids) => {
+      setFilter({ kind: "external" });
+      setSearch("");
+      setSelectedNoteId(ids[0]);
+    });
+  }, [vault.status]);
 
   const { notes } = vault;
   const visibleNotes = useMemo(
