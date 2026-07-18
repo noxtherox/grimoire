@@ -374,23 +374,24 @@ describe("external note store workflow", () => {
   });
 
   it("keeps linked sources untouched and manages copied documents with their hub", async () => {
-    const document = join(root, "one", "Quarterly Review.pptx");
-    await writeFile(document, "presentation bytes");
+    const document = join(root, "one", "Product Walkthrough.mp4");
+    await writeFile(document, "video bytes");
 
-    const linked = await createNote(["inbox"], "# Linked presentation\n\nContext\n");
+    const linked = await createNote(["inbox"], "# Linked video\n\nContext\n");
     expect(linked).toBeDefined();
     await expect(attachFileToNote(linked!.id, document, "local")).resolves.toEqual({
       status: "attached",
       noteId: linked!.id,
     });
     expect(getFileHubReference(getNotes().find((note) => note.id === linked!.id)!)).toMatchObject({
+      name: "Product Walkthrough.mp4",
       kind: "local",
       managed: false,
     });
     await setNoteType(linked!.id, ["research"]);
     await trashNote(linked!.id);
     await restoreNote(linked!.id);
-    await expect(readFile(document, "utf8")).resolves.toBe("presentation bytes");
+    await expect(readFile(document, "utf8")).resolves.toBe("video bytes");
 
     const managedDocument = join(root, "two", "Quarterly Review.pptx");
     await writeFile(managedDocument, "managed presentation bytes");
@@ -418,7 +419,7 @@ describe("external note store workflow", () => {
     await restoreNote(managed!.id);
     await deleteNoteForever(managed!.id);
     await expect(nodeStat(join(vault, "research", "Quarterly Review.pptx"))).rejects.toThrow();
-    await expect(readFile(document, "utf8")).resolves.toBe("presentation bytes");
+    await expect(readFile(document, "utf8")).resolves.toBe("video bytes");
     await expect(readFile(managedDocument, "utf8")).resolves.toBe(
       "managed presentation bytes",
     );

@@ -57,7 +57,7 @@ import { loadDefaultNoteType } from "@/lib/note-preferences";
 import {
   fileNameFromPath,
   getFileHubReference,
-  isSupportedDocumentPath,
+  isMarkdownFilePath,
   mostSpecificLocation,
   normalizeRelativeFilePath,
   parseFileLocations,
@@ -1111,8 +1111,10 @@ async function drainDesktopOpenPaths(): Promise<void> {
   desktopOpenDrain = (async () => {
     while (state.status === "ready" && pendingDesktopOpenPaths.length > 0) {
       const paths = pendingDesktopOpenPaths.splice(0);
-      const documentPaths = paths.filter(isSupportedDocumentPath);
-      const notePaths = paths.filter((path) => !isSupportedDocumentPath(path));
+      // Markdown files are editable external notes. Every other file is kept
+      // opaque and represented by a safe linked-file note.
+      const notePaths = paths.filter(isMarkdownFilePath);
+      const documentPaths = paths.filter((path) => !isMarkdownFilePath(path));
       const ids = [
         ...(await openDocumentPathsFromFinder(documentPaths)),
         ...(await openExternalPaths(notePaths)),
@@ -1323,23 +1325,6 @@ export async function revealNoteInDesktop(id: string): Promise<void> {
 
 // ---- file hubs --------------------------------------------------------------
 
-export const DOCUMENT_EXTENSIONS = [
-  "pdf",
-  "doc",
-  "docx",
-  "rtf",
-  "txt",
-  "odt",
-  "xls",
-  "xlsx",
-  "csv",
-  "ppt",
-  "pptx",
-  "pages",
-  "numbers",
-  "key",
-];
-
 export interface FileHubStatus {
   resolved: ResolvedFileHub;
   exists: boolean;
@@ -1392,8 +1377,7 @@ export async function getFileHubStatus(id: string): Promise<FileHubStatus | null
 export async function chooseDocumentFile(): Promise<string | null> {
   if (!isTauri()) return null;
   const picked = await openDialog({
-    title: "Choose a document",
-    filters: [{ name: "Documents", extensions: DOCUMENT_EXTENSIONS }],
+    title: "Choose a file",
   });
   return typeof picked === "string" ? picked : null;
 }
@@ -1458,10 +1442,6 @@ export async function attachFileToNote(
     return { status: "failed" };
   }
   const canonical = await canonicalizeFsPath(selectedPath);
-  if (!isSupportedDocumentPath(canonical)) {
-    showError("That file type is not supported by file hubs.");
-    return { status: "failed" };
-  }
   const duplicate = await findHubForAbsolutePath(canonical, id);
   if (duplicate) return { status: "duplicate", noteId: duplicate.id };
 

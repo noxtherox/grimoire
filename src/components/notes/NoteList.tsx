@@ -190,7 +190,7 @@ export function NoteList({
               </TooltipTrigger>
               <TooltipContent>
                 {inFiles
-                  ? "Add a document to Files"
+                  ? "Add a file to Files"
                   : inExternal
                     ? "Open markdown file(s)"
                     : "New note (⌘N)"}
@@ -434,7 +434,7 @@ export function NoteList({
             <AlertDialogDescription>
               This cannot be undone.
               {deleteTarget && getFileHubReference(deleteTarget)?.managed
-                ? ` The managed document “${getFileHubReference(deleteTarget)?.name}” will also be permanently deleted.`
+                ? ` The managed file “${getFileHubReference(deleteTarget)?.name}” will also be permanently deleted.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>

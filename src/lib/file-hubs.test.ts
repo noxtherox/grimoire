@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getFileHubReference,
+  isMarkdownFilePath,
   mostSpecificLocation,
   normalizeRelativeFilePath,
   parseFileLocations,
@@ -22,6 +23,13 @@ const locationReference: FileHubReference = {
 };
 
 describe("file hub metadata", () => {
+  it("only treats markdown extensions as editable notes", () => {
+    expect(isMarkdownFilePath("/Users/me/Notes/Plan.md")).toBe(true);
+    expect(isMarkdownFilePath("/Users/me/Notes/Plan.MARKDOWN")).toBe(true);
+    expect(isMarkdownFilePath("/Users/me/Videos/demo.mp4")).toBe(false);
+    expect(isMarkdownFilePath("/Users/me/Archive/data.bin")).toBe(false);
+  });
+
   it("round-trips reserved flat frontmatter without changing the body", () => {
     const content = setFileHubReference("# Proposal\n\nNotes", locationReference);
     expect(content).toContain("grimoire-file-kind: location");

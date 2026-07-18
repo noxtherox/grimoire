@@ -77,23 +77,8 @@ export function fileExtension(name: string): string {
   return match?.[1] ?? "";
 }
 
-export function isSupportedDocumentPath(path: string): boolean {
-  return new Set([
-    "pdf",
-    "doc",
-    "docx",
-    "rtf",
-    "txt",
-    "odt",
-    "xls",
-    "xlsx",
-    "csv",
-    "ppt",
-    "pptx",
-    "pages",
-    "numbers",
-    "key",
-  ]).has(fileExtension(path));
+export function isMarkdownFilePath(path: string): boolean {
+  return ["md", "markdown"].includes(fileExtension(path));
 }
 
 export function getFileHubReference(

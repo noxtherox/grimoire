@@ -580,13 +580,13 @@ export function EditorPane({
           <AlertDialogHeader>
             <AlertDialogTitle>Detach “{fileHub?.name ?? "this file"}” from this note?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the document link and preview from the note. The document itself will not be deleted or moved.
+              This removes the file link and preview from the note. The file itself will not be deleted or moved.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => detachFileHub(note.id)}>
-              Detach document
+              Detach file
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -691,7 +691,7 @@ export function EditorPane({
             <AlertDialogDescription>
               You can restore this note later from Trash.
               {fileHub?.managed
-                ? ` Its managed document “${fileHub.name}” will move with it.`
+                ? ` Its managed file “${fileHub.name}” will move with it.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
