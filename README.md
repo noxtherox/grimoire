@@ -100,6 +100,29 @@ src/store/            note and vault state
 src-tauri/            Rust desktop shell, permissions, and packaging
 ```
 
+## Built with Codex and GPT-5.6
+
+A substantial part of Grimoire's recent development was completed through an
+iterative human–AI workflow using [OpenAI Codex](https://openai.com/codex/) with
+GPT-5.6.
+
+- **Product direction stayed human-led.** Features began with concrete goals,
+  screenshots, interaction feedback, and acceptance decisions from the project
+  owner.
+- **Codex worked in the real repository.** It explored the existing codebase,
+  edited React, TypeScript, and Rust files, followed changes across the Tauri
+  boundary, and used Git and GitHub to keep the work reviewable.
+- **GPT-5.6 powered the reasoning.** The model helped turn product requests into
+  implementation plans, trace behavior across multiple files and languages,
+  diagnose failures, and propose focused changes.
+- **Changes were validated, not simply generated.** Codex ran targeted tests,
+  lint and production builds where appropriate, inspected diffs, and iterated on
+  issues found during live desktop and browser checks.
+
+Codex and GPT-5.6 were development tools; they are not bundled into the app.
+Grimoire currently has no OpenAI API integration, and using it does not require
+an OpenAI account or API key.
+
 ## Project status
 
 Grimoire is under active development. The browser build is useful for previewing
