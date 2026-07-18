@@ -18,6 +18,10 @@ export type PropertyType =
 export interface PropertyDef {
   name: string;
   type: PropertyType;
+  /** list only: the choices available when editing a note. */
+  listOptions?: string[];
+  /** list only: allow selecting more than one choice. */
+  listMultiple?: boolean;
   /** relation only: restrict linkable notes to this type (and its sub-types). Unset = any type. */
   relationTypeKey?: string;
   /** relation only: allow linking more than one note. */
@@ -91,6 +95,39 @@ export function sanitizePropertyName(input: string): string {
     .slice(0, 60)
     .trim();
   return name;
+}
+
+/** Trims list choices and removes blank or case-insensitive duplicates. */
+export function normalizeListOptions(options: string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const option of options) {
+    const trimmed = option.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+/** Reads either legacy scalar values or YAML arrays as list selections. */
+export function listSelections(
+  value: PropertyValue | undefined,
+): string[] {
+  if (Array.isArray(value)) return normalizeListOptions(value);
+  if (value === undefined || value === null || value === "") return [];
+  return [String(value)];
+}
+
+/** Serializes selected list choices according to the definition's mode. */
+export function listPropertyValue(
+  selections: string[],
+  multiple: boolean,
+): PropertyValue | null {
+  const normalized = normalizeListOptions(selections);
+  if (!normalized.length) return null;
+  return multiple ? normalized : normalized[0];
 }
 
 /** Best-guess property type for an existing frontmatter value. */

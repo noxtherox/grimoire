@@ -1,8 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 import {
+  readFile,
   readTextFile,
   remove as removeFsFile,
   stat,
@@ -29,6 +32,7 @@ import {
 } from "@/lib/note-utils";
 import {
   type PropertyValue,
+  getNoteProperties,
   renameContentProperty,
   setContentProperty,
   withBody,
@@ -37,6 +41,8 @@ import {
   type PropertyDef,
   type PropertySchemas,
   hoistSchemasToTopLevel,
+  listPropertyValue,
+  listSelections,
 } from "@/lib/properties";
 import {
   type TypeIcons,
@@ -47,9 +53,28 @@ import type { VaultBackend } from "@/lib/vault/backend";
 import { BrowserVault } from "@/lib/vault/browser";
 import { DesktopVault } from "@/lib/vault/desktop";
 import { showError } from "@/utils/toast";
+import { loadDefaultNoteType } from "@/lib/note-preferences";
+import {
+  fileNameFromPath,
+  getFileHubReference,
+  isSupportedDocumentPath,
+  mostSpecificLocation,
+  normalizeRelativeFilePath,
+  parseFileLocations,
+  pathInsideRoot,
+  removeFileHubReference,
+  resolveFileHubReference,
+  serializeFileLocations,
+  setFileHubReference,
+  type FileHubReference,
+  type FileLocationDefinition,
+  type ResolvedFileHub,
+} from "@/lib/file-hubs";
 
 const VAULT_PATH_KEY = "grimoire.vaultPath";
 const EXTERNAL_PATHS_KEY = "grimoire.externalPaths";
+const FILE_LOCATION_MAPPINGS_KEY = "grimoire.fileLocationMappings.v1";
+const FILE_HUB_MAPPINGS_KEY = "grimoire.fileHubMappings.v1";
 const FLUSH_DELAY_MS = 500;
 
 export interface VaultState {
@@ -64,9 +89,21 @@ export interface VaultState {
   schemas: PropertySchemas;
   /** Custom lucide icon per type, keyed by full type key ("work/projects"). */
   typeIcons: TypeIcons;
+  /** Synced names/IDs for portable base folders. Absolute roots stay local. */
+  fileLocations: FileLocationDefinition[];
   /** Notes temporarily locked while a close or move operation commits. */
   busyNoteIds: ReadonlySet<string>;
+  /** Simultaneous editor and disk edits awaiting an explicit user choice. */
+  conflicts: Readonly<Record<string, NoteConflict>>;
   error: string | null;
+}
+
+export interface NoteConflict {
+  noteId: string;
+  currentContent: string;
+  diskContent: string | null;
+  diskPath: string;
+  kind: "modified" | "deleted";
 }
 
 let state: VaultState = {
@@ -77,7 +114,9 @@ let state: VaultState = {
   extraTypes: [],
   schemas: {},
   typeIcons: {},
+  fileLocations: [],
   busyNoteIds: new Set(),
+  conflicts: {},
   error: null,
 };
 
@@ -86,9 +125,18 @@ let initialized = false;
 const listeners = new Set<() => void>();
 const pendingFlush = new Map<string, ReturnType<typeof setTimeout>>();
 const inFlightFlush = new Map<string, Promise<boolean>>();
+const diskSnapshots = new Map<string, string>();
 const externalPathRegistry = new Map<string, string>();
 let desktopCloseHookInstalled = false;
 let closingAfterFlush = false;
+let desktopOpenHookInstalled = false;
+let desktopOpenDrain: Promise<void> | null = null;
+let desktopSyncTimer: ReturnType<typeof setInterval> | null = null;
+let desktopSyncInFlight = false;
+const pendingDesktopOpenPaths: string[] = [];
+const desktopOpenListeners = new Set<
+  (ids: string[], firstNoteIsExternal: boolean) => void
+>();
 
 function emit() {
   listeners.forEach((listener) => listener());
@@ -112,7 +160,53 @@ export function getNotes(): Note[] {
   return state.notes;
 }
 
-// ---- pinned paths, persisted per vault ------------------------------------
+function loadStringMap(key: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveStringMap(key: string, value: Record<string, string>) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Device-local mappings are best effort and can always be recreated.
+  }
+}
+
+export function getFileLocationMappings(): Record<string, string> {
+  return loadStringMap(FILE_LOCATION_MAPPINGS_KEY);
+}
+
+export function getFileHubMappings(): Record<string, string> {
+  return loadStringMap(FILE_HUB_MAPPINGS_KEY);
+}
+
+function setFileLocationMapping(id: string, path: string | null) {
+  const mappings = getFileLocationMappings();
+  if (path) mappings[id] = path;
+  else delete mappings[id];
+  saveStringMap(FILE_LOCATION_MAPPINGS_KEY, mappings);
+  setState({});
+}
+
+function setFileHubMapping(id: string, path: string | null) {
+  const mappings = getFileHubMappings();
+  if (path) mappings[id] = path;
+  else delete mappings[id];
+  saveStringMap(FILE_HUB_MAPPINGS_KEY, mappings);
+  setState({});
+}
+
+// ---- note display state, persisted per vault ------------------------------
 
 function pinnedStorageKey(): string {
   return `grimoire.pinned.${state.location ?? "browser"}`;
@@ -137,6 +231,36 @@ function savePinnedPaths() {
   } catch {
     // ignore
   }
+}
+
+function archivedStorageKey(): string {
+  return `grimoire.archived.${state.location ?? "browser"}`;
+}
+
+function loadArchivedPaths(): Set<string> {
+  try {
+    const raw = localStorage.getItem(archivedStorageKey());
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    // ignore malformed or unavailable local storage
+  }
+  return new Set();
+}
+
+function saveArchivedPaths() {
+  try {
+    const paths = state.notes
+      .filter((note) => note.archived && !isExternalNote(note) && !isTrashed(note))
+      .map((note) => logicalPath(note));
+    localStorage.setItem(archivedStorageKey(), JSON.stringify(paths));
+  } catch {
+    // ignore unavailable local storage
+  }
+}
+
+function saveNoteDisplayState() {
+  savePinnedPaths();
+  saveArchivedPaths();
 }
 
 // ---- external notes, persisted as absolute paths across vaults -------------
@@ -198,6 +322,7 @@ async function readExternalNote(path: string): Promise<Note> {
     externalPath: path,
     content,
     pinned: false,
+    archived: false,
     updatedAt: (info.mtime ?? new Date()).toISOString(),
   };
 }
@@ -253,6 +378,7 @@ async function loadSchemas(
 }
 
 const TYPE_ICONS_PATH = ".grimoire/type-icons.json";
+const FILE_LOCATIONS_PATH = ".grimoire/file-locations.json";
 
 async function loadTypeIcons(fromBackend: VaultBackend): Promise<TypeIcons> {
   try {
@@ -270,6 +396,16 @@ async function loadTypeIcons(fromBackend: VaultBackend): Promise<TypeIcons> {
   }
 }
 
+async function loadFileLocations(
+  fromBackend: VaultBackend,
+): Promise<FileLocationDefinition[]> {
+  try {
+    return parseFileLocations(await fromBackend.readText(FILE_LOCATIONS_PATH));
+  } catch {
+    return [];
+  }
+}
+
 async function loadVault(nextBackend: VaultBackend) {
   backend = nextBackend;
   clearImageUrlCache();
@@ -281,22 +417,27 @@ async function loadVault(nextBackend: VaultBackend) {
     extraTypes: [],
     schemas: {},
     typeIcons: {},
+    fileLocations: [],
     busyNoteIds: new Set(),
+    conflicts: {},
     error: null,
   });
   try {
-    const [files, schemas, dirs, typeIcons] = await Promise.all([
+    const [files, schemas, dirs, typeIcons, fileLocations] = await Promise.all([
       nextBackend.loadAll(),
       loadSchemas(nextBackend),
       nextBackend.listDirs(),
       loadTypeIcons(nextBackend),
+      loadFileLocations(nextBackend),
     ]);
     const pinned = loadPinnedPaths();
+    const archived = loadArchivedPaths();
     const vaultNotes: Note[] = files.map((file) => ({
       id: crypto.randomUUID(),
       path: file.path,
       content: file.content,
       pinned: pinned.has(file.path),
+      archived: archived.has(file.path),
       updatedAt: file.updatedAt,
     }));
     let externalNotes =
@@ -328,13 +469,18 @@ async function loadVault(nextBackend: VaultBackend) {
     const extraTypes = dirs
       .filter((dir) => dir !== IMAGE_DIR && !dir.startsWith(`${IMAGE_DIR}/`))
       .map((dir) => dir.split("/").slice(0, MAX_TYPE_DEPTH));
+    const loadedNotes = [...externalNotes, ...vaultNotes];
+    diskSnapshots.clear();
+    for (const note of loadedNotes) diskSnapshots.set(note.id, note.content);
     setState({
       status: "ready",
-      notes: [...externalNotes, ...vaultNotes],
+      notes: loadedNotes,
       extraTypes,
       schemas,
       typeIcons,
+      fileLocations,
     });
+    void drainDesktopOpenPaths();
   } catch (error) {
     setState({ status: "error", error: String(error) });
   }
@@ -345,6 +491,8 @@ export function initStore() {
   initialized = true;
   if (isTauri()) {
     installDesktopCloseHook();
+    installDesktopOpenHook();
+    installDesktopFileSync();
     const saved = localStorage.getItem(VAULT_PATH_KEY);
     if (saved) {
       void loadVault(new DesktopVault(saved));
@@ -371,6 +519,220 @@ export async function reloadVault() {
   if (!backend) return;
   if (!(await flushAll())) return;
   await loadVault(backend);
+}
+
+function relativePathKey(path: string): string {
+  return normalizeFsPath(path);
+}
+
+function installDesktopFileSync() {
+  if (desktopSyncTimer) return;
+  desktopSyncTimer = setInterval(() => void synchronizeDesktopFiles(), 1_000);
+}
+
+export async function synchronizeDesktopFiles() {
+  if (
+    desktopSyncInFlight ||
+    state.status !== "ready" ||
+    backend?.kind !== "desktop"
+  ) {
+    return;
+  }
+  desktopSyncInFlight = true;
+  const activeBackend = backend;
+  try {
+    const externalNotes = state.notes.filter(isExternalNote);
+    const [files, dirs, externalFiles, fileLocations] = await Promise.all([
+      activeBackend.loadAll(),
+      activeBackend.listDirs(),
+      Promise.all(
+        externalNotes.map(async (note) => {
+          try {
+            const [content, info] = await Promise.all([
+              readTextFile(note.externalPath as string),
+              stat(note.externalPath as string),
+            ]);
+            return {
+              id: note.id,
+              content,
+              updatedAt: (info.mtime ?? new Date()).toISOString(),
+            };
+          } catch {
+            return { id: note.id, content: null, updatedAt: null };
+          }
+        }),
+      ),
+      loadFileLocations(activeBackend),
+    ]);
+    if (backend !== activeBackend || state.status !== "ready") return;
+
+    const latestNotes = [...state.notes];
+    const nextConflicts = { ...state.conflicts };
+    const filesByPath = new Map(
+      files.map((file) => [relativePathKey(file.path), file] as const),
+    );
+    const matchedFilePaths = new Set<string>();
+    let notesChanged = false;
+    let registryChanged = false;
+
+    const conflictFor = (
+      note: Note,
+      diskContent: string | null,
+      kind: NoteConflict["kind"],
+    ) => {
+      cancelPendingFlush(note.id);
+      nextConflicts[note.id] = {
+        noteId: note.id,
+        currentContent: note.content,
+        diskContent,
+        diskPath: noteDiskPath(note),
+        kind,
+      };
+    };
+
+    // Preserve a note's session identity across straightforward external renames.
+    const unmatchedFiles = new Set(files.map((file) => relativePathKey(file.path)));
+    for (let index = 0; index < latestNotes.length; index += 1) {
+      const note = latestNotes[index];
+      if (isExternalNote(note)) continue;
+      const key = relativePathKey(note.path);
+      if (filesByPath.has(key)) {
+        unmatchedFiles.delete(key);
+        continue;
+      }
+      if (pendingFlush.has(note.id) || inFlightFlush.has(note.id)) continue;
+      const snapshot = diskSnapshots.get(note.id);
+      if (snapshot === undefined || note.content !== snapshot) continue;
+      const candidates = [...unmatchedFiles]
+        .map((candidateKey) => filesByPath.get(candidateKey))
+        .filter((file) => file?.content === snapshot);
+      if (candidates.length !== 1) continue;
+      const renamedFile = candidates[0] as (typeof files)[number];
+      const renamedKey = relativePathKey(renamedFile.path);
+      unmatchedFiles.delete(renamedKey);
+      matchedFilePaths.add(renamedKey);
+      latestNotes[index] = {
+        ...note,
+        path: renamedFile.path,
+        content: renamedFile.content,
+        updatedAt: renamedFile.updatedAt,
+      };
+      diskSnapshots.set(note.id, renamedFile.content);
+      delete nextConflicts[note.id];
+      notesChanged = true;
+    }
+
+    for (let index = latestNotes.length - 1; index >= 0; index -= 1) {
+      const note = latestNotes[index];
+      if (isExternalNote(note)) continue;
+      const key = relativePathKey(note.path);
+      const file = filesByPath.get(key);
+      if (file) {
+        matchedFilePaths.add(key);
+        const snapshot = diskSnapshots.get(note.id);
+        if (file.content === snapshot) continue;
+        if (pendingFlush.has(note.id) || inFlightFlush.has(note.id)) continue;
+        if (nextConflicts[note.id] || note.content !== snapshot) {
+          conflictFor(note, file.content, "modified");
+          continue;
+        }
+        latestNotes[index] = {
+          ...note,
+          content: file.content,
+          updatedAt: file.updatedAt,
+        };
+        diskSnapshots.set(note.id, file.content);
+        notesChanged = true;
+        continue;
+      }
+
+      if (pendingFlush.has(note.id) || inFlightFlush.has(note.id)) continue;
+      const snapshot = diskSnapshots.get(note.id);
+      if (nextConflicts[note.id] || note.content !== snapshot) {
+        conflictFor(note, null, "deleted");
+        continue;
+      }
+      latestNotes.splice(index, 1);
+      diskSnapshots.delete(note.id);
+      delete nextConflicts[note.id];
+      notesChanged = true;
+    }
+
+    for (const file of files) {
+      const key = relativePathKey(file.path);
+      if (matchedFilePaths.has(key)) continue;
+      const note: Note = {
+        id: crypto.randomUUID(),
+        path: file.path,
+        content: file.content,
+        pinned: false,
+        archived: false,
+        updatedAt: file.updatedAt,
+      };
+      latestNotes.push(note);
+      diskSnapshots.set(note.id, note.content);
+      notesChanged = true;
+    }
+
+    for (const externalFile of externalFiles) {
+      const index = latestNotes.findIndex(
+        (note) => note.id === externalFile.id && isExternalNote(note),
+      );
+      if (index < 0) continue;
+      const note = latestNotes[index];
+      if (pendingFlush.has(note.id) || inFlightFlush.has(note.id)) continue;
+      const snapshot = diskSnapshots.get(note.id);
+      if (externalFile.content === null) {
+        if (nextConflicts[note.id] || note.content !== snapshot) {
+          conflictFor(note, null, "deleted");
+        } else {
+          latestNotes.splice(index, 1);
+          diskSnapshots.delete(note.id);
+          delete nextConflicts[note.id];
+          forgetExternalPath(note.externalPath as string);
+          registryChanged = true;
+          notesChanged = true;
+        }
+        continue;
+      }
+      if (externalFile.content === snapshot) continue;
+      if (nextConflicts[note.id] || note.content !== snapshot) {
+        conflictFor(note, externalFile.content, "modified");
+      } else {
+        latestNotes[index] = {
+          ...note,
+          content: externalFile.content,
+          updatedAt: externalFile.updatedAt ?? new Date().toISOString(),
+        };
+        diskSnapshots.set(note.id, externalFile.content);
+        notesChanged = true;
+      }
+    }
+
+    const extraTypes = dirs
+      .filter((dir) => dir !== IMAGE_DIR && !dir.startsWith(`${IMAGE_DIR}/`))
+      .map((dir) => dir.split("/").slice(0, MAX_TYPE_DEPTH));
+    const typesChanged =
+      JSON.stringify(extraTypes) !== JSON.stringify(state.extraTypes);
+    const conflictsChanged =
+      JSON.stringify(nextConflicts) !== JSON.stringify(state.conflicts);
+    const locationsChanged =
+      JSON.stringify(fileLocations) !== JSON.stringify(state.fileLocations);
+    if (notesChanged || typesChanged || conflictsChanged || locationsChanged) {
+      setState({
+        notes: latestNotes,
+        extraTypes: typesChanged ? extraTypes : state.extraTypes,
+        conflicts: nextConflicts,
+        fileLocations: locationsChanged ? fileLocations : state.fileLocations,
+      });
+      if (notesChanged) saveNoteDisplayState();
+    }
+    if (registryChanged) saveExternalPaths();
+  } catch (error) {
+    console.error("Grimoire: failed to synchronize files", error);
+  } finally {
+    desktopSyncInFlight = false;
+  }
 }
 
 // ---- path helpers ----------------------------------------------------------
@@ -453,9 +815,75 @@ function reportError(action: string, error: unknown) {
 
 // ---- content editing with debounced file sync ------------------------------
 
+function noteDiskPath(note: Note): string {
+  return noteAbsolutePath(note, state.location) ?? note.path;
+}
+
+function cancelPendingFlush(id: string) {
+  const timer = pendingFlush.get(id);
+  if (timer) clearTimeout(timer);
+  pendingFlush.delete(id);
+}
+
+function setNoteConflict(
+  note: Note,
+  diskContent: string | null,
+  kind: NoteConflict["kind"],
+) {
+  cancelPendingFlush(note.id);
+  setState({
+    conflicts: {
+      ...state.conflicts,
+      [note.id]: {
+        noteId: note.id,
+        currentContent: note.content,
+        diskContent,
+        diskPath: noteDiskPath(note),
+        kind,
+      },
+    },
+  });
+}
+
+function clearNoteConflict(id: string) {
+  if (!state.conflicts[id]) return;
+  const conflicts = { ...state.conflicts };
+  delete conflicts[id];
+  setState({ conflicts });
+}
+
+async function readNoteFromDisk(note: Note): Promise<string | null> {
+  try {
+    if (note.externalPath) return await readTextFile(note.externalPath);
+    if (!backend || !(await backend.exists(note.path))) return null;
+    return await backend.readText(note.path);
+  } catch {
+    return null;
+  }
+}
+
+async function diskStillMatchesSnapshot(note: Note): Promise<boolean> {
+  const snapshot = diskSnapshots.get(note.id);
+  if (snapshot === undefined) return true;
+  const diskContent = await readNoteFromDisk(note);
+  if (diskContent === snapshot) return true;
+  setNoteConflict(note, diskContent, diskContent === null ? "deleted" : "modified");
+  return false;
+}
+
 export function updateNoteContent(id: string, content: string) {
   if (closingAfterFlush || state.busyNoteIds.has(id)) return;
   updateNote(id, { content, updatedAt: new Date().toISOString() });
+  const conflict = state.conflicts[id];
+  if (conflict) {
+    setState({
+      conflicts: {
+        ...state.conflicts,
+        [id]: { ...conflict, currentContent: content },
+      },
+    });
+    return;
+  }
   const existing = pendingFlush.get(id);
   if (existing) clearTimeout(existing);
   pendingFlush.set(
@@ -465,18 +893,31 @@ export function updateNoteContent(id: string, content: string) {
 }
 
 /** Writes the freshest content to disk after any earlier write for this note. */
-async function persistNote(id: string): Promise<boolean> {
+async function persistNote(
+  id: string,
+  force = false,
+  recreateMissing = false,
+): Promise<boolean> {
   const note = state.notes.find((candidate) => candidate.id === id);
   if (!note) return true;
   try {
+    if (!force) {
+      if (state.conflicts[id]) return false;
+      if (!(await diskStillMatchesSnapshot(note))) return false;
+    }
     if (note.externalPath) {
       await writeTextFile(note.externalPath, note.content);
+      diskSnapshots.set(id, note.content);
       return true;
     }
     if (!backend) return false;
     let path = note.path;
     const desiredStem = sanitizeFileStem(noteTitle(note));
-    if (desiredStem !== fileStem(note.path) && !isTrashed(note)) {
+    if (
+      !recreateMissing &&
+      desiredStem !== fileStem(note.path) &&
+      !isTrashed(note)
+    ) {
       const dir = note.path.split("/").slice(0, -1).join("/");
       const target = await writeUniquePathOnDisk(
         dir,
@@ -494,10 +935,11 @@ async function persistNote(id: string): Promise<boolean> {
         }
         path = target;
         updateNote(id, { path });
-        savePinnedPaths();
+        saveNoteDisplayState();
       }
     }
     await backend.write(path, note.content);
+    diskSnapshots.set(id, note.content);
     return true;
   } catch (error) {
     reportError("save note", error);
@@ -525,6 +967,10 @@ async function flushUntilIdle(id: string): Promise<boolean> {
 }
 
 async function flushAll(): Promise<boolean> {
+  if (Object.keys(state.conflicts).length > 0) {
+    showError("Resolve note changes from disk before closing Grimoire.");
+    return false;
+  }
   let saved = true;
   do {
     const ids = new Set([...pendingFlush.keys(), ...inFlightFlush.keys()]);
@@ -533,6 +979,47 @@ async function flushAll(): Promise<boolean> {
     }
   } while (pendingFlush.size > 0 || inFlightFlush.size > 0);
   return saved;
+}
+
+export async function resolveNoteConflict(
+  id: string,
+  resolution: "disk" | "current",
+): Promise<boolean> {
+  const conflict = state.conflicts[id];
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!conflict || !note) return false;
+
+  if (resolution === "disk") {
+    if (conflict.diskContent === null) {
+      diskSnapshots.delete(id);
+      clearNoteConflict(id);
+      if (note.externalPath) {
+        forgetExternalPath(note.externalPath);
+        saveExternalPaths();
+      }
+      setState({ notes: state.notes.filter((candidate) => candidate.id !== id) });
+      return true;
+    }
+    diskSnapshots.set(id, conflict.diskContent);
+    updateNote(id, {
+      content: conflict.diskContent,
+      updatedAt: new Date().toISOString(),
+    });
+    clearNoteConflict(id);
+    return true;
+  }
+
+  clearNoteConflict(id);
+  const saved = await persistNote(id, true, conflict.kind === "deleted");
+  if (!saved) {
+    setNoteConflict(note, conflict.diskContent, conflict.kind);
+    return false;
+  }
+  return true;
+}
+
+export function getNoteConflict(id: string): NoteConflict | null {
+  return state.conflicts[id] ?? null;
 }
 
 function installDesktopCloseHook() {
@@ -548,9 +1035,97 @@ function installDesktopCloseHook() {
         closingAfterFlush = false;
         return;
       }
-      await appWindow.close();
+      // `close()` emits another close-request event. Re-entering that event from
+      // inside this handler can leave the native close request waiting forever
+      // on macOS. The request has already been approved after the flush, so
+      // force the window to close without emitting the event again.
+      await appWindow.destroy();
+      closingAfterFlush = false;
     })
     .catch((error) => reportError("install safe close handler", error));
+}
+
+async function collectPendingDesktopOpenPaths() {
+  const paths = await invoke<string[]>("take_pending_open_files");
+  if (!paths.length) return;
+  pendingDesktopOpenPaths.push(...paths);
+  await drainDesktopOpenPaths();
+}
+
+function installDesktopOpenHook() {
+  if (desktopOpenHookInstalled) return;
+  desktopOpenHookInstalled = true;
+  void listen("grimoire-open-files", () => {
+    void collectPendingDesktopOpenPaths().catch((error) =>
+      reportError("open file from Finder", error),
+    );
+  })
+    .then(() => collectPendingDesktopOpenPaths())
+    .catch((error) => reportError("install desktop file-open handler", error));
+}
+
+async function drainDesktopOpenPaths(): Promise<void> {
+  if (state.status !== "ready" || pendingDesktopOpenPaths.length === 0) return;
+  if (desktopOpenDrain) return desktopOpenDrain;
+
+  desktopOpenDrain = (async () => {
+    while (state.status === "ready" && pendingDesktopOpenPaths.length > 0) {
+      const paths = pendingDesktopOpenPaths.splice(0);
+      const documentPaths = paths.filter(isSupportedDocumentPath);
+      const notePaths = paths.filter((path) => !isSupportedDocumentPath(path));
+      const ids = [
+        ...(await openDocumentPathsFromFinder(documentPaths)),
+        ...(await openExternalPaths(notePaths)),
+      ];
+      if (!ids.length) continue;
+      const firstNote = state.notes.find((note) => note.id === ids[0]);
+      const firstNoteIsExternal = firstNote
+        ? isExternalNote(firstNote)
+        : false;
+      desktopOpenListeners.forEach((listener) =>
+        listener(ids, firstNoteIsExternal),
+      );
+    }
+  })().finally(() => {
+    desktopOpenDrain = null;
+  });
+  return desktopOpenDrain;
+}
+
+async function openDocumentPathsFromFinder(paths: string[]): Promise<string[]> {
+  const ids: string[] = [];
+  for (const path of paths) {
+    const canonical = await canonicalizeFsPath(path);
+    const existing = await findHubForAbsolutePath(canonical);
+    if (existing) {
+      ids.push(existing.id);
+      continue;
+    }
+    const name = fileNameFromPath(canonical);
+    const stem = name.replace(/\.[^.]+$/, "") || "Document";
+    const note = await createNote(
+      loadDefaultNoteType(state.location),
+      `# ${stem}\n\n`,
+    );
+    if (!note) continue;
+    let result = await attachFileToNote(note.id, canonical, "auto");
+    // Finder must complete without a modal during cold start. An unmatched
+    // document becomes a safe local-only link and can later be copied from the
+    // file card.
+    if (result.status === "needs-choice") {
+      result = await attachFileToNote(note.id, canonical, "local");
+    }
+    if (result.status === "attached") ids.push(note.id);
+    else await deleteNoteForever(note.id);
+  }
+  return ids;
+}
+
+export function onDesktopNotesOpened(
+  listener: (ids: string[], firstNoteIsExternal: boolean) => void,
+): () => void {
+  desktopOpenListeners.add(listener);
+  return () => desktopOpenListeners.delete(listener);
 }
 
 if (typeof window !== "undefined" && !isTauri()) {
@@ -571,6 +1146,10 @@ export async function openExternalNotes(): Promise<string[]> {
   });
   if (!picked) return [];
   const paths = typeof picked === "string" ? [picked] : picked;
+  return openExternalPaths(paths);
+}
+
+async function openExternalPaths(paths: string[]): Promise<string[]> {
   const openedIds: string[] = [];
   const newNotes: Note[] = [];
 
@@ -578,17 +1157,18 @@ export async function openExternalNotes(): Promise<string[]> {
   for (const path of await Promise.all(paths.map(canonicalizeFsPath))) {
     distinctPaths.set(normalizeFsPath(path), path);
   }
-  const vaultPaths = new Set(
+  const vaultNotesByPath = new Map(
     await Promise.all(
       state.notes
         .filter((note) => !isExternalNote(note))
-        .map(async (note) =>
+        .map(async (note) => [
           normalizeFsPath(
             await canonicalizeFsPath(
               noteAbsolutePath(note, state.location) ?? "",
             ),
           ),
-        ),
+          note.id,
+        ] as const),
     ),
   );
   for (const [normalizedPath, path] of distinctPaths) {
@@ -602,7 +1182,11 @@ export async function openExternalNotes(): Promise<string[]> {
       openedIds.push(existingExternal.id);
       continue;
     }
-    if (vaultPaths.has(normalizedPath)) continue;
+    const existingVaultId = vaultNotesByPath.get(normalizedPath);
+    if (existingVaultId) {
+      openedIds.push(existingVaultId);
+      continue;
+    }
     try {
       const note = await readExternalNote(path);
       registerExternalPath(path);
@@ -614,6 +1198,7 @@ export async function openExternalNotes(): Promise<string[]> {
   }
 
   if (newNotes.length) {
+    for (const note of newNotes) diskSnapshots.set(note.id, note.content);
     setState({ notes: [...newNotes, ...state.notes] });
   }
   if (openedIds.length) saveExternalPaths();
@@ -630,6 +1215,8 @@ export async function closeExternalNote(id: string): Promise<void> {
     const current = state.notes.find((candidate) => candidate.id === id);
     if (!current?.externalPath) return;
     setState({ notes: state.notes.filter((candidate) => candidate.id !== id) });
+    diskSnapshots.delete(id);
+    clearNoteConflict(id);
     forgetExternalPath(current.externalPath);
     saveExternalPaths();
   } finally {
@@ -668,6 +1255,7 @@ export async function moveExternalNoteToVault(
         throw error;
       }
       updateNote(id, { path: target, externalPath: undefined });
+      diskSnapshots.set(id, note.content);
       forgetExternalPath(note.externalPath);
       saveExternalPaths();
       suggestIconsForNewType(typePath, existedKeys);
@@ -691,6 +1279,332 @@ export async function revealNoteInDesktop(id: string): Promise<void> {
   } catch (error) {
     reportError("reveal note in desktop", error);
   }
+}
+
+// ---- file hubs --------------------------------------------------------------
+
+export const DOCUMENT_EXTENSIONS = [
+  "pdf",
+  "doc",
+  "docx",
+  "rtf",
+  "txt",
+  "odt",
+  "xls",
+  "xlsx",
+  "csv",
+  "ppt",
+  "pptx",
+  "pages",
+  "numbers",
+  "key",
+];
+
+export interface FileHubStatus {
+  resolved: ResolvedFileHub;
+  exists: boolean;
+  size: number | null;
+  modifiedAt: string | null;
+}
+
+export type AttachFileResult =
+  | { status: "attached"; noteId: string }
+  | { status: "duplicate"; noteId: string }
+  | { status: "needs-choice"; path: string }
+  | { status: "failed" };
+
+function resolvedHub(note: Note): ResolvedFileHub | null {
+  const reference = getFileHubReference(note);
+  if (!reference) return null;
+  return resolveFileHubReference(
+    reference,
+    state.location,
+    state.fileLocations,
+    getFileLocationMappings(),
+    getFileHubMappings(),
+  );
+}
+
+export function getResolvedFileHub(note: Note): ResolvedFileHub | null {
+  return resolvedHub(note);
+}
+
+export async function getFileHubStatus(id: string): Promise<FileHubStatus | null> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  const resolved = note ? resolvedHub(note) : null;
+  if (!resolved) return null;
+  if (!resolved.absolutePath) {
+    return { resolved, exists: false, size: null, modifiedAt: null };
+  }
+  try {
+    const info = await stat(resolved.absolutePath);
+    return {
+      resolved,
+      exists: info.isFile,
+      size: info.size,
+      modifiedAt: info.mtime?.toISOString() ?? null,
+    };
+  } catch {
+    return { resolved, exists: false, size: null, modifiedAt: null };
+  }
+}
+
+export async function chooseDocumentFile(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const picked = await openDialog({
+    title: "Choose a document",
+    filters: [{ name: "Documents", extensions: DOCUMENT_EXTENSIONS }],
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** Creates a note for a document selected from the Files section. */
+export async function createFileNote(
+  typePath: string[],
+): Promise<Note | null> {
+  const picked = await chooseDocumentFile();
+  if (!picked) return null;
+  const name = fileNameFromPath(picked);
+  const stem = name.replace(/\.[^.]+$/, "") || "Document";
+  const note = await createNote(typePath, `# ${stem}\n\n`);
+  if (!note) return null;
+  let result = await attachFileToNote(note.id, picked, "auto");
+  if (result.status === "duplicate") {
+    await deleteNoteForever(note.id);
+    return getNotes().find((candidate) => candidate.id === result.noteId) ?? null;
+  }
+  if (result.status === "needs-choice") {
+    result = await attachFileToNote(note.id, result.path, "local");
+  }
+  if (result.status !== "attached") {
+    await deleteNoteForever(note.id);
+    return null;
+  }
+  return getNotes().find((candidate) => candidate.id === note.id) ?? note;
+}
+
+async function findHubForAbsolutePath(
+  absolutePath: string,
+  exceptId?: string,
+): Promise<Note | null> {
+  const canonical = normalizeFsPath(await canonicalizeFsPath(absolutePath));
+  for (const note of state.notes) {
+    if (note.id === exceptId) continue;
+    const candidate = resolvedHub(note)?.absolutePath;
+    if (!candidate) continue;
+    if (normalizeFsPath(await canonicalizeFsPath(candidate)) === canonical) return note;
+  }
+  return null;
+}
+
+async function copyDocumentIntoVault(note: Note, source: string): Promise<string> {
+  if (!state.location) throw new Error("The vault is unavailable");
+  const dir = note.path.split("/").slice(0, -1).join("/");
+  return invoke<string>("copy_file_into_vault", {
+    source,
+    root: state.location,
+    relativeDirectory: dir,
+    fileName: fileNameFromPath(source),
+  });
+}
+
+export async function attachFileToNote(
+  id: string,
+  selectedPath: string,
+  mode: "auto" | "local" | "copy" = "auto",
+): Promise<AttachFileResult> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!note || isExternalNote(note) || isTrashed(note) || !isTauri()) {
+    return { status: "failed" };
+  }
+  const canonical = await canonicalizeFsPath(selectedPath);
+  if (!isSupportedDocumentPath(canonical)) {
+    showError("That file type is not supported by file hubs.");
+    return { status: "failed" };
+  }
+  const duplicate = await findHubForAbsolutePath(canonical, id);
+  if (duplicate) return { status: "duplicate", noteId: duplicate.id };
+
+  const idValue = getFileHubReference(note)?.id ?? crypto.randomUUID();
+  const name = fileNameFromPath(canonical);
+  let reference: FileHubReference | null = null;
+  const vaultPath = state.location ? pathInsideRoot(state.location, canonical) : null;
+  const locationMatch = mostSpecificLocation(
+    canonical,
+    state.fileLocations,
+    getFileLocationMappings(),
+  );
+  try {
+    if (mode === "copy") {
+      reference = {
+        id: idValue,
+        name,
+        kind: "vault",
+        path: await copyDocumentIntoVault(note, canonical),
+        managed: true,
+      };
+    } else if (vaultPath && mode === "auto") {
+      reference = { id: idValue, name, kind: "vault", path: vaultPath, managed: false };
+    } else if (locationMatch && mode === "auto") {
+      reference = {
+        id: idValue,
+        name,
+        kind: "location",
+        locationId: locationMatch.location.id,
+        path: locationMatch.path,
+        managed: false,
+      };
+    } else if (mode === "local") {
+      reference = { id: idValue, name, kind: "local", managed: false };
+      setFileHubMapping(idValue, canonical);
+    } else {
+      return { status: "needs-choice", path: canonical };
+    }
+    setFileHubMapping(idValue, null);
+    if (reference.kind === "local") setFileHubMapping(idValue, canonical);
+    updateNoteContent(id, setFileHubReference(note.content, reference));
+    return { status: "attached", noteId: id };
+  } catch (error) {
+    reportError("attach document", error);
+    return { status: "failed" };
+  }
+}
+
+export function detachFileHub(id: string) {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  const reference = note ? getFileHubReference(note) : null;
+  if (!note || !reference) return;
+  setFileHubMapping(reference.id, null);
+  updateNoteContent(id, removeFileHubReference(note.content));
+}
+
+export async function locateFileHub(id: string): Promise<boolean> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  const reference = note ? getFileHubReference(note) : null;
+  if (!note || !reference) return false;
+  const picked = await chooseDocumentFile();
+  if (!picked) return false;
+  const canonical = await canonicalizeFsPath(picked);
+  if (reference.kind === "location" && reference.locationId) {
+    const mappedRoot = getFileLocationMappings()[reference.locationId];
+    const mappedRelative = mappedRoot ? pathInsideRoot(mappedRoot, canonical) : null;
+    if (mappedRelative) {
+      updateNoteContent(
+        id,
+        setFileHubReference(note.content, {
+          ...reference,
+          name: fileNameFromPath(canonical),
+          path: mappedRelative,
+        }),
+      );
+      setFileHubMapping(reference.id, null);
+      return true;
+    }
+    const suffix = `/${reference.path ?? ""}`;
+    const normalized = normalizeFsPath(canonical);
+    if (reference.path && normalized.endsWith(suffix)) {
+      setFileLocationMapping(
+        reference.locationId,
+        canonical.slice(0, canonical.length - suffix.length),
+      );
+      setFileHubMapping(reference.id, null);
+      return true;
+    }
+  }
+  if (reference.kind === "vault" && state.location) {
+    const relative = pathInsideRoot(state.location, canonical);
+    if (relative) {
+      updateNoteContent(
+        id,
+        setFileHubReference(note.content, {
+          ...reference,
+          name: fileNameFromPath(canonical),
+          path: relative,
+        }),
+      );
+      return true;
+    }
+  }
+  setFileHubMapping(reference.id, canonical);
+  return true;
+}
+
+export async function openFileHub(id: string): Promise<void> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  const path = note ? resolvedHub(note)?.absolutePath : null;
+  if (!path) return;
+  try {
+    await openPath(path);
+  } catch (error) {
+    reportError("open document", error);
+  }
+}
+
+export async function revealFileHub(id: string): Promise<void> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  const path = note ? resolvedHub(note)?.absolutePath : null;
+  if (!path) return;
+  try {
+    await invoke("reveal_in_file_manager", { path });
+  } catch (error) {
+    reportError("reveal document", error);
+  }
+}
+
+export async function readFileHubBytes(id: string): Promise<Uint8Array> {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  const path = note ? resolvedHub(note)?.absolutePath : null;
+  if (!path) throw new Error("The file location is not configured on this device.");
+  return readFile(path);
+}
+
+function saveFileLocations(locations: FileLocationDefinition[]) {
+  setState({ fileLocations: locations });
+  if (!backend) return;
+  backend
+    .write(FILE_LOCATIONS_PATH, serializeFileLocations(locations))
+    .catch((error) => reportError("save file locations", error));
+}
+
+export async function addFileLocation(name: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  const root = await openDialog({ directory: true, title: `Choose the ${name} folder` });
+  if (typeof root !== "string" || !root) return false;
+  const location = { id: crypto.randomUUID(), name: name.trim() };
+  if (!location.name) return false;
+  saveFileLocations([...state.fileLocations, location]);
+  setFileLocationMapping(location.id, await canonicalizeFsPath(root));
+  return true;
+}
+
+export function renameFileLocation(id: string, name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  saveFileLocations(
+    state.fileLocations.map((location) =>
+      location.id === id ? { ...location, name: trimmed } : location,
+    ),
+  );
+}
+
+export async function mapFileLocation(id: string): Promise<boolean> {
+  const location = state.fileLocations.find((candidate) => candidate.id === id);
+  if (!location || !isTauri()) return false;
+  const root = await openDialog({ directory: true, title: `Locate ${location.name}` });
+  if (typeof root !== "string" || !root) return false;
+  setFileLocationMapping(id, await canonicalizeFsPath(root));
+  return true;
+}
+
+export function fileLocationUsages(id: string): Note[] {
+  return state.notes.filter((note) => getFileHubReference(note)?.locationId === id);
+}
+
+export function removeFileLocation(id: string): boolean {
+  if (fileLocationUsages(id).length) return false;
+  saveFileLocations(state.fileLocations.filter((location) => location.id !== id));
+  setFileLocationMapping(id, null);
+  return true;
 }
 
 // ---- images ------------------------------------------------------------------
@@ -825,9 +1739,25 @@ export function updateTypeProperty(
   const next = defs.slice();
   next[idx] = def;
   saveSchemas({ ...state.schemas, [ownerKey]: next });
-  if (def.name !== oldName) {
+  if (def.name !== oldName || (def.type === "list" && !def.listMultiple)) {
     for (const note of notesOfType(ownerKey)) {
-      const migrated = renameContentProperty(note.content, oldName, def.name);
+      let migrated = note.content;
+      if (def.type === "list" && !def.listMultiple) {
+        const values = getNoteProperties(migrated);
+        const existingKey = Object.keys(values).find(
+          (key) => key.toLowerCase() === oldName.toLowerCase(),
+        );
+        if (existingKey) {
+          migrated = setContentProperty(
+            migrated,
+            existingKey,
+            listPropertyValue(listSelections(values[existingKey]), false),
+          );
+        }
+      }
+      if (def.name !== oldName) {
+        migrated = renameContentProperty(migrated, oldName, def.name);
+      }
       if (migrated !== note.content) updateNoteContent(note.id, migrated);
     }
   }
@@ -1065,7 +1995,7 @@ export async function renameType(
   }
 
   setState({ notes, extraTypes });
-  savePinnedPaths();
+  saveNoteDisplayState();
   if (schemasChanged) saveSchemas(schemas);
   if (iconsChanged) saveTypeIcons(typeIcons);
   return true;
@@ -1088,15 +2018,77 @@ export async function createNote(
     path,
     content,
     pinned: false,
+    archived: false,
     updatedAt: new Date().toISOString(),
   };
-  setState({ notes: [note, ...state.notes] });
   try {
     await backend.write(path, content);
+    diskSnapshots.set(note.id, content);
+    setState({ notes: [note, ...state.notes] });
   } catch (error) {
     reportError("create note", error);
+    return null;
   }
   return note;
+}
+
+async function uniqueManagedDocumentPath(
+  dir: string,
+  name: string,
+  currentPath: string,
+): Promise<string> {
+  if (!backend) throw new Error("The vault is unavailable");
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const extension = dot > 0 ? name.slice(dot) : "";
+  const prefix = dir ? `${dir}/` : "";
+  for (let index = 0; ; index++) {
+    const candidate = `${prefix}${stem}${index === 0 ? "" : ` ${index + 1}`}${extension}`;
+    if (candidate === currentPath || !(await backend.exists(candidate))) return candidate;
+  }
+}
+
+async function moveNoteWithManagedDocument(note: Note, target: string) {
+  if (!backend) throw new Error("The vault is unavailable");
+  const reference = getFileHubReference(note);
+  if (
+    !reference?.managed ||
+    reference.kind !== "vault" ||
+    !reference.path ||
+    !(await backend.exists(reference.path))
+  ) {
+    await backend.move(note.path, target);
+    updateNote(note.id, { path: target });
+    return;
+  }
+  const targetDir = target.split("/").slice(0, -1).join("/");
+  const documentTarget = await uniqueManagedDocumentPath(
+    targetDir,
+    fileNameFromPath(reference.path),
+    reference.path,
+  );
+  if (documentTarget === reference.path) {
+    await backend.move(note.path, target);
+    updateNote(note.id, { path: target });
+    return;
+  }
+  await backend.move(note.path, target);
+  try {
+    await backend.move(reference.path, documentTarget);
+    const content = setFileHubReference(note.content, {
+      ...reference,
+      path: documentTarget,
+    });
+    await backend.write(target, content);
+    diskSnapshots.set(note.id, content);
+    updateNote(note.id, { path: target, content });
+  } catch (error) {
+    await backend.move(target, note.path).catch(() => {});
+    if (await backend.exists(documentTarget)) {
+      await backend.move(documentTarget, reference.path).catch(() => {});
+    }
+    throw error;
+  }
 }
 
 export async function setNoteType(id: string, typePath: string[]) {
@@ -1111,9 +2103,8 @@ export async function setNoteType(id: string, typePath: string[]) {
   const existedKeys = existingTypeKeys();
   const target = uniquePath(typeKey(typePath), fileStem(note.path), id);
   try {
-    await backend.move(note.path, target);
-    updateNote(id, { path: target });
-    savePinnedPaths();
+    await moveNoteWithManagedDocument(note, target);
+    saveNoteDisplayState();
     await suggestIconsForNewType(typePath, existedKeys);
   } catch (error) {
     reportError("move note", error);
@@ -1127,6 +2118,14 @@ export function toggleNotePinned(id: string) {
   savePinnedPaths();
 }
 
+export function toggleNoteArchived(id: string) {
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!note || isExternalNote(note) || isTrashed(note)) return;
+  const archived = !note.archived;
+  updateNote(id, { archived, pinned: archived ? false : note.pinned });
+  saveNoteDisplayState();
+}
+
 export async function trashNote(id: string) {
   if (!backend) return;
   await flushAll();
@@ -1135,9 +2134,9 @@ export async function trashNote(id: string) {
   const dir = [TRASH_DIR, ...noteTypePath(note)].join("/");
   const target = uniquePath(dir, fileStem(note.path), id);
   try {
-    await backend.move(note.path, target);
-    updateNote(id, { path: target, pinned: false });
-    savePinnedPaths();
+    await moveNoteWithManagedDocument(note, target);
+    updateNote(id, { pinned: false, archived: false });
+    saveNoteDisplayState();
   } catch (error) {
     reportError("trash note", error);
   }
@@ -1151,8 +2150,7 @@ export async function restoreNote(id: string) {
   const dir = logical.split("/").slice(0, -1).join("/");
   const target = uniquePath(dir, fileStem(logical), id);
   try {
-    await backend.move(note.path, target);
-    updateNote(id, { path: target });
+    await moveNoteWithManagedDocument(note, target);
   } catch (error) {
     reportError("restore note", error);
   }
@@ -1163,7 +2161,13 @@ export async function deleteNoteForever(id: string) {
   const note = state.notes.find((candidate) => candidate.id === id);
   if (!note || isExternalNote(note)) return;
   try {
+    const reference = getFileHubReference(note);
+    if (reference?.managed && reference.kind === "vault" && reference.path) {
+      await backend.removeFile(reference.path);
+    }
     await backend.removeFile(note.path);
+    diskSnapshots.delete(id);
+    clearNoteConflict(id);
     setState({ notes: state.notes.filter((candidate) => candidate.id !== id) });
   } catch (error) {
     reportError("delete note", error);
@@ -1175,6 +2179,10 @@ export async function emptyTrash() {
   const trashed = state.notes.filter((note) => isTrashed(note));
   for (const note of trashed) {
     try {
+      const reference = getFileHubReference(note);
+      if (reference?.managed && reference.kind === "vault" && reference.path) {
+        await backend.removeFile(reference.path);
+      }
       await backend.removeFile(note.path);
     } catch (error) {
       reportError("empty trash", error);
@@ -1182,4 +2190,8 @@ export async function emptyTrash() {
     }
   }
   setState({ notes: state.notes.filter((note) => !isTrashed(note)) });
+  for (const note of trashed) {
+    diskSnapshots.delete(note.id);
+    clearNoteConflict(note.id);
+  }
 }

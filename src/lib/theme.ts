@@ -1,3 +1,5 @@
+import { applyLogoForSidebar } from "@/lib/branding";
+
 /**
  * App-wide color theme. Every distinctive Grimoire color lives behind a
  * `--grim-*` CSS variable (an "R G B" triplet so Tailwind opacity modifiers
@@ -82,6 +84,54 @@ export const THEME_PRESETS: { name: string; theme: GrimoireTheme }[] = [
       surface: "#eff4f8",
       sidebarBg: "#0f1c2e",
       sidebarFg: "#d5e2f0",
+    },
+  },
+  {
+    name: "Paper",
+    theme: {
+      accent: "#d84b40",
+      link: "#2563eb",
+      text: "#1f2937",
+      editorBg: "#ffffff",
+      surface: "#f4f5f7",
+      sidebarBg: "#e9ebef",
+      sidebarFg: "#27303f",
+    },
+  },
+  {
+    name: "Parchment",
+    theme: {
+      accent: "#b85c38",
+      link: "#9a5b13",
+      text: "#32281f",
+      editorBg: "#fffdf8",
+      surface: "#f6f0e4",
+      sidebarBg: "#ebe1d0",
+      sidebarFg: "#4a392a",
+    },
+  },
+  {
+    name: "Sage",
+    theme: {
+      accent: "#2f855a",
+      link: "#0f766e",
+      text: "#21352b",
+      editorBg: "#fbfdf9",
+      surface: "#eef4eb",
+      sidebarBg: "#dfeadd",
+      sidebarFg: "#294332",
+    },
+  },
+  {
+    name: "Lavender",
+    theme: {
+      accent: "#7657d5",
+      link: "#6546c4",
+      text: "#2d2940",
+      editorBg: "#fefcff",
+      surface: "#f3f0f8",
+      sidebarBg: "#e7e1f1",
+      sidebarFg: "#403650",
     },
   },
   {
@@ -187,6 +237,7 @@ export function applyTheme(theme: GrimoireTheme): void {
     const rgb = hexToRgb(theme[key]);
     if (rgb) root.style.setProperty(CSS_VARS[key], rgb.join(" "));
   }
+  applyLogoForSidebar(theme.sidebarBg);
 
   // Derive the shadcn neutrals (borders, muted text, dialog/badge surfaces,
   // hover grays) from text-over-editor mixes so dark themes hold together

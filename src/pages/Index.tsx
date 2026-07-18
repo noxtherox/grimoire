@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, Loader2 } from "lucide-react";
+import type {
+  ImperativePanelGroupHandle,
+  ImperativePanelHandle,
+} from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
 import {
   ResizableHandle,
@@ -7,36 +11,129 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Sidebar } from "@/components/notes/Sidebar";
+import { CollapsedSidebar } from "@/components/notes/CollapsedSidebar";
 import { NoteList } from "@/components/notes/NoteList";
 import { EditorPane } from "@/components/notes/EditorPane";
+import { GrimoireLogo } from "@/components/GrimoireLogo";
+import { TerminalPanel } from "@/components/terminal/TerminalPanel";
 import {
   chooseVaultFolder,
+  createFileNote,
   createNote,
   initStore,
   moveExternalNoteToVault,
+  onDesktopNotesOpened,
   openExternalNotes,
   useVault,
 } from "@/store/notes-store";
-import { filterNotes, type NoteFilter } from "@/lib/filters";
+import {
+  EMPTY_NOTE_LIST_FILTERS,
+  filterNotes,
+  type NoteFilter,
+  type NoteListFilters,
+} from "@/lib/filters";
 import { DEFAULT_TYPE } from "@/lib/note-utils";
+import {
+  loadDefaultNoteType,
+  loadHideSubtypeNotes,
+  loadNoteTypeOrder,
+  saveDefaultNoteType,
+  saveHideSubtypeNotes,
+  saveNoteTypeOrder,
+} from "@/lib/note-preferences";
+import { cn } from "@/lib/utils";
+import { showError } from "@/utils/toast";
+
+const SIDEBAR_DEFAULT_SIZE = 15;
+const NOTE_LIST_DEFAULT_SIZE = 18;
+const EDITOR_DEFAULT_SIZE = 67;
+const DEFAULT_PANEL_LAYOUT = [
+  SIDEBAR_DEFAULT_SIZE,
+  NOTE_LIST_DEFAULT_SIZE,
+  EDITOR_DEFAULT_SIZE,
+];
 
 const Index = () => {
   const vault = useVault();
   const [filter, setFilter] = useState<NoteFilter>({ kind: "all" });
   const [search, setSearch] = useState("");
+  const [listFilters, setListFilters] =
+    useState<NoteListFilters>(EMPTY_NOTE_LIST_FILTERS);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [defaultNoteType, setDefaultNoteType] = useState<string[]>(DEFAULT_TYPE);
+  const [typeOrder, setTypeOrder] = useState<string[]>([]);
+  const [hideSubtypeNotes, setHideSubtypeNotes] = useState(false);
+  const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
+  const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const expandedPanelLayoutRef = useRef([...DEFAULT_PANEL_LAYOUT]);
+  const previousPanelLayoutRef = useRef([...DEFAULT_PANEL_LAYOUT]);
 
   useEffect(() => {
+    const stopListening = onDesktopNotesOpened(
+      (ids, firstNoteIsExternal) => {
+        setFilter(
+          firstNoteIsExternal ? { kind: "external" } : { kind: "all" },
+        );
+        setListFilters(EMPTY_NOTE_LIST_FILTERS);
+        setSearch("");
+        setSelectedNoteId(ids[0]);
+      },
+    );
     initStore();
+    return stopListening;
   }, []);
 
   const { notes } = vault;
+  const effectiveFilter = useMemo<NoteFilter>(
+    () =>
+      filter.kind === "type"
+        ? { ...filter, includeSubtypes: !hideSubtypeNotes }
+        : filter,
+    [filter, hideSubtypeNotes],
+  );
+  const filterOptions = useMemo(
+    () =>
+      filterNotes(notes, effectiveFilter, "", {
+        ...EMPTY_NOTE_LIST_FILTERS,
+        showArchived: listFilters.showArchived,
+      }),
+    [notes, effectiveFilter, listFilters.showArchived],
+  );
   const visibleNotes = useMemo(
-    () => filterNotes(notes, filter, search),
-    [notes, filter, search],
+    () => filterNotes(notes, effectiveFilter, search, listFilters),
+    [notes, effectiveFilter, search, listFilters],
   );
 
+  const handleFilterChange = (nextFilter: NoteFilter) => {
+    setFilter(nextFilter);
+    setListFilters(EMPTY_NOTE_LIST_FILTERS);
+  };
+
   const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
+
+  useEffect(() => {
+    setDefaultNoteType(loadDefaultNoteType(vault.location));
+    setTypeOrder(loadNoteTypeOrder(vault.location));
+    setHideSubtypeNotes(loadHideSubtypeNotes(vault.location));
+  }, [vault.location]);
+
+  const handleDefaultNoteTypeChange = (typePath: string[]) => {
+    setDefaultNoteType(typePath);
+    saveDefaultNoteType(vault.location, typePath);
+  };
+
+  const handleTypeOrderChange = (order: string[]) => {
+    setTypeOrder(order);
+    saveNoteTypeOrder(vault.location, order);
+  };
+
+  const handleHideSubtypeNotesChange = (hidden: boolean) => {
+    setHideSubtypeNotes(hidden);
+    saveHideSubtypeNotes(vault.location, hidden);
+  };
 
   // Keep a sensible selection as filters change or notes are trashed
   useEffect(() => {
@@ -49,12 +146,31 @@ const Index = () => {
   }, [vault.status, visibleNotes, selectedNote]);
 
   const handleCreateNote = async () => {
-    const typePath = filter.kind === "type" ? filter.path : DEFAULT_TYPE;
+    const typePath =
+      filter.kind === "type"
+        ? filter.path
+        : filter.kind === "all"
+          ? defaultNoteType
+          : DEFAULT_TYPE;
     const note = await createNote(typePath);
     if (!note) return;
-    if (filter.kind === "trash" || filter.kind === "external") {
+    if (
+      filter.kind === "trash" ||
+      filter.kind === "external" ||
+      filter.kind === "files"
+    ) {
       setFilter({ kind: "all" });
     }
+    setListFilters(EMPTY_NOTE_LIST_FILTERS);
+    setSearch("");
+    setSelectedNoteId(note.id);
+  };
+
+  const handleCreateFile = async () => {
+    const note = await createFileNote(defaultNoteType);
+    if (!note) return;
+    setFilter({ kind: "files" });
+    setListFilters(EMPTY_NOTE_LIST_FILTERS);
     setSearch("");
     setSelectedNoteId(note.id);
   };
@@ -69,10 +185,33 @@ const Index = () => {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter]);
+  }, [filter, defaultNoteType]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.shiftKey ||
+        event.altKey ||
+        event.key.toLowerCase() !== "j"
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (!vault.isDesktop) return;
+      if (!selectedNote) {
+        showError("Select a note to open its terminal.");
+        return;
+      }
+      setTerminalOpen((current) => !current);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedNote, vault.isDesktop]);
 
   const handleOpenNote = (id: string) => {
     setFilter({ kind: "all" });
+    setListFilters(EMPTY_NOTE_LIST_FILTERS);
     setSearch("");
     setSelectedNoteId(id);
   };
@@ -81,6 +220,7 @@ const Index = () => {
     const ids = await openExternalNotes();
     if (!ids.length) return;
     setFilter({ kind: "external" });
+    setListFilters(EMPTY_NOTE_LIST_FILTERS);
     setSearch("");
     setSelectedNoteId(ids[0]);
   };
@@ -89,15 +229,57 @@ const Index = () => {
     const moved = await moveExternalNoteToVault(id, typePath);
     if (!moved) return;
     setFilter({ kind: "type", path: typePath });
+    setListFilters(EMPTY_NOTE_LIST_FILTERS);
     setSearch("");
     setSelectedNoteId(id);
+  };
+
+  const handleToggleFocusMode = () => {
+    const panelGroup = panelGroupRef.current;
+    if (!panelGroup) return;
+
+    if (!isFocusMode) {
+      previousPanelLayoutRef.current = panelGroup.getLayout();
+    }
+    setIsFocusMode((focused) => !focused);
+  };
+
+  useEffect(() => {
+    const panelGroup = panelGroupRef.current;
+    if (!panelGroup) return;
+    panelGroup.setLayout(
+      isFocusMode ? [0, 0, 100] : previousPanelLayoutRef.current,
+    );
+  }, [isFocusMode]);
+
+  useEffect(() => {
+    if (!isSidebarCollapsed || isFocusMode) return;
+
+    const panelGroup = panelGroupRef.current;
+    if (!panelGroup) return;
+
+    const noteListSize = expandedPanelLayoutRef.current[1];
+    panelGroup.setLayout([0, noteListSize, 100 - noteListSize]);
+  }, [isFocusMode, isSidebarCollapsed]);
+
+  const handlePanelLayout = (layout: number[]) => {
+    if (!isFocusMode && layout[0] > 0) {
+      expandedPanelLayoutRef.current = layout;
+    }
+  };
+
+  const handleRestoreSidebar = () => {
+    panelGroupRef.current?.setLayout(expandedPanelLayoutRef.current);
   };
 
   if (vault.status === "pick-vault" || vault.status === "error") {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-grim-surface">
         <div className="max-w-sm text-center">
-          <p className="text-5xl">📖</p>
+          <GrimoireLogo
+            alt="Grimoire"
+            className="mx-auto h-20 w-20 rounded-xl"
+          />
           <h1 className="mt-4 text-xl font-semibold">Grimoire</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Your notes are plain markdown files in a folder — folders are types.
@@ -128,51 +310,135 @@ const Index = () => {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden">
-      <ResizablePanelGroup direction="horizontal">
-        <ResizablePanel defaultSize={17} minSize={12} maxSize={28}>
+    <div
+      className={cn(
+        "relative flex h-screen w-screen overflow-hidden",
+        isSidebarCollapsed && !isFocusMode && "pl-12",
+      )}
+    >
+      {isSidebarCollapsed && !isFocusMode && (
+        <div className="absolute inset-y-0 left-0 w-12">
+          <CollapsedSidebar
+            notes={notes}
+            extraTypes={vault.extraTypes}
+            typeIcons={vault.typeIcons}
+            typeOrder={typeOrder}
+            filter={filter}
+            isDesktop={vault.isDesktop}
+            defaultNoteType={defaultNoteType}
+            hideSubtypeNotes={hideSubtypeNotes}
+            onDefaultNoteTypeChange={handleDefaultNoteTypeChange}
+            onHideSubtypeNotesChange={handleHideSubtypeNotesChange}
+            onFilterChange={handleFilterChange}
+            onRestore={handleRestoreSidebar}
+          />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <ResizablePanelGroup
+          ref={panelGroupRef}
+          direction="horizontal"
+          onLayout={handlePanelLayout}
+        >
+        <ResizablePanel
+          ref={sidebarPanelRef}
+          defaultSize={SIDEBAR_DEFAULT_SIZE}
+          minSize={12}
+          maxSize={28}
+          collapsible
+          collapsedSize={0}
+          onCollapse={() => setIsSidebarCollapsed(true)}
+          onExpand={() => setIsSidebarCollapsed(false)}
+          className={isFocusMode ? "invisible" : undefined}
+        >
           <Sidebar
             notes={notes}
             extraTypes={vault.extraTypes}
             typeIcons={vault.typeIcons}
+            typeOrder={typeOrder}
             filter={filter}
             isDesktop={vault.isDesktop}
             vaultLocation={vault.location}
-            onFilterChange={setFilter}
+            defaultNoteType={defaultNoteType}
+            hideSubtypeNotes={hideSubtypeNotes}
+            onDefaultNoteTypeChange={handleDefaultNoteTypeChange}
+            onHideSubtypeNotesChange={handleHideSubtypeNotesChange}
+            onTypeOrderChange={handleTypeOrderChange}
+            onFilterChange={handleFilterChange}
+            onCollapse={() => sidebarPanelRef.current?.collapse()}
           />
         </ResizablePanel>
-        <ResizableHandle className="w-px bg-transparent" />
-        <ResizablePanel defaultSize={26} minSize={18} maxSize={40}>
+        <ResizableHandle
+          className={isFocusMode ? "hidden" : "w-px bg-transparent"}
+        />
+        <ResizablePanel
+          defaultSize={NOTE_LIST_DEFAULT_SIZE}
+          minSize={isFocusMode ? 0 : 18}
+          maxSize={40}
+          collapsible={isFocusMode}
+          className={isFocusMode ? "invisible" : undefined}
+        >
           <NoteList
             notes={visibleNotes}
+            filterOptions={filterOptions}
             filter={filter}
+            listFilters={listFilters}
             selectedNoteId={selectedNoteId}
             search={search}
             onSearchChange={setSearch}
+            onListFiltersChange={setListFilters}
             onSelectNote={setSelectedNoteId}
             onCreateNote={() => void handleCreateNote()}
+            onCreateFile={() => void handleCreateFile()}
             onOpenExternalNotes={() => void handleOpenExternalNotes()}
           />
         </ResizablePanel>
-        <ResizableHandle className="w-px bg-border/60" />
-        <ResizablePanel defaultSize={57} minSize={30}>
-          <EditorPane
-            note={selectedNote}
-            allNotes={notes}
-            extraTypes={vault.extraTypes}
-            schemas={vault.schemas}
-            typeIcons={vault.typeIcons}
-            vaultLocation={vault.location}
-            isBusy={
-              selectedNote ? vault.busyNoteIds.has(selectedNote.id) : false
-            }
-            onOpenNote={handleOpenNote}
-            onMoveExternalToVault={(id, typePath) =>
-              void handleMoveExternalToVault(id, typePath)
-            }
-          />
+        <ResizableHandle
+          className={isFocusMode ? "hidden" : "w-px bg-border/60"}
+        />
+        <ResizablePanel defaultSize={EDITOR_DEFAULT_SIZE} minSize={30}>
+          <div className="flex h-full min-w-0">
+            <div className="min-w-0 flex-1">
+              <EditorPane
+                note={selectedNote}
+                allNotes={notes}
+                extraTypes={vault.extraTypes}
+                schemas={vault.schemas}
+                typeIcons={vault.typeIcons}
+                vaultLocation={vault.location}
+                isBusy={
+                  selectedNote ? vault.busyNoteIds.has(selectedNote.id) : false
+                }
+                onOpenNote={handleOpenNote}
+                onMoveExternalToVault={(id, typePath) =>
+                  void handleMoveExternalToVault(id, typePath)
+                }
+                isFocusMode={isFocusMode}
+                onToggleFocusMode={handleToggleFocusMode}
+                isDesktop={vault.isDesktop}
+                terminalOpen={terminalOpen}
+                onToggleTerminal={() =>
+                  setTerminalOpen((current) => !current)
+                }
+                conflict={
+                  selectedNote
+                    ? (vault.conflicts[selectedNote.id] ?? null)
+                    : null
+                }
+              />
+            </div>
+            {vault.isDesktop && (
+              <TerminalPanel
+                open={terminalOpen}
+                note={selectedNote}
+                vaultLocation={vault.location}
+                onOpenChange={setTerminalOpen}
+              />
+            )}
+          </div>
         </ResizablePanel>
-      </ResizablePanelGroup>
+        </ResizablePanelGroup>
+      </div>
     </div>
   );
 };

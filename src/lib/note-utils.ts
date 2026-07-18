@@ -1,4 +1,4 @@
-import { noteBody } from "@/lib/frontmatter";
+import { getNoteProperties, noteBody } from "@/lib/frontmatter";
 
 export const TRASH_DIR = ".trash";
 export const MAX_TYPE_DEPTH = 3;
@@ -17,6 +17,8 @@ export interface Note {
   externalPath?: string;
   content: string;
   pinned: boolean;
+  /** Grimoire-only visibility state; archived notes remain in place on disk. */
+  archived?: boolean;
   updatedAt: string;
 }
 
@@ -54,6 +56,21 @@ export function noteAbsolutePath(
   return `${vaultLocation.replace(/[\\/]$/, "")}/${note.path}`;
 }
 
+/** Absolute folder containing a note, when local filesystem access exists. */
+export function noteContainingFolder(
+  note: Note,
+  vaultLocation: string | null,
+): string | null {
+  const absolutePath = noteAbsolutePath(note, vaultLocation);
+  if (!absolutePath) return null;
+  const normalized = absolutePath.replace(/\\/g, "/");
+  const separator = normalized.lastIndexOf("/");
+  if (separator < 0) return null;
+  const folder = normalized.slice(0, separator);
+  if (/^[a-z]:$/i.test(folder)) return `${folder}/`;
+  return folder || "/";
+}
+
 export function isRemoteUrl(path: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(path);
 }
@@ -78,6 +95,10 @@ export function formatImageMarkdown(
 
 export function isTrashed(note: Note): boolean {
   return !isExternalNote(note) && note.path.startsWith(`${TRASH_DIR}/`);
+}
+
+export function isArchived(note: Note): boolean {
+  return !isExternalNote(note) && note.archived === true;
 }
 
 /** Vault-relative path ignoring the .trash prefix. */
@@ -170,6 +191,7 @@ export interface TypeNode {
 export function buildTypeTree(
   notes: Note[],
   extraTypePaths: string[][] = [],
+  typeOrder: string[] = [],
 ): TypeNode[] {
   const roots: TypeNode[] = [];
   const ensureChild = (list: TypeNode[], name: string, path: string[]) => {
@@ -200,7 +222,54 @@ export function buildTypeTree(
     if (isExternalNote(note) || isTrashed(note)) continue;
     addPath(noteTypePath(note), 1);
   }
+  if (typeOrder.length) {
+    const positions = new Map(typeOrder.map((key, index) => [key, index]));
+    const sortLevel = (nodes: TypeNode[]) => {
+      nodes.sort((a, b) => {
+        const aPosition = positions.get(typeKey(a.path));
+        const bPosition = positions.get(typeKey(b.path));
+        if (aPosition !== undefined && bPosition !== undefined) {
+          return aPosition - bPosition;
+        }
+        if (aPosition !== undefined) return -1;
+        if (bPosition !== undefined) return 1;
+        return a.name.localeCompare(b.name);
+      });
+      nodes.forEach((node) => sortLevel(node.children));
+    };
+    sortLevel(roots);
+  }
   return roots;
+}
+
+/** Returns a stable type order after moving one type before or after a sibling. */
+export function reorderTypeTree(
+  nodes: TypeNode[],
+  sourceKey: string,
+  targetKey: string,
+  placement: "before" | "after",
+): string[] | null {
+  let moved = false;
+  const visit = (level: TypeNode[]): TypeNode[] => {
+    const sourceIndex = level.findIndex((node) => typeKey(node.path) === sourceKey);
+    const targetIndex = level.findIndex((node) => typeKey(node.path) === targetKey);
+    let ordered = level;
+    if (sourceIndex >= 0 && targetIndex >= 0 && sourceIndex !== targetIndex) {
+      ordered = [...level];
+      const [source] = ordered.splice(sourceIndex, 1);
+      const adjustedTarget = ordered.findIndex(
+        (node) => typeKey(node.path) === targetKey,
+      );
+      ordered.splice(adjustedTarget + (placement === "after" ? 1 : 0), 0, source);
+      moved = true;
+    }
+    return ordered.map((node) => ({ ...node, children: visit(node.children) }));
+  };
+  const reordered = visit(nodes);
+  if (!moved) return null;
+  const flatten = (level: TypeNode[]): string[] =>
+    level.flatMap((node) => [typeKey(node.path), ...flatten(node.children)]);
+  return flatten(reordered);
 }
 
 /** All distinct type paths in use, including intermediate levels. */
@@ -232,16 +301,16 @@ export function parseTypePath(input: string): string[] {
     .map((segment) =>
       segment
         .trim()
-        .toLowerCase()
         .replace(/[\\:*?"<>|#[\]]/g, "")
-        .replace(/\s+/g, "-"),
+        .replace(/\s+/g, " ")
+        .trim(),
     )
     .filter(
       (segment) =>
         segment.length > 0 &&
         segment !== "." &&
         segment !== ".." &&
-        segment !== TRASH_DIR,
+        segment.toLowerCase() !== TRASH_DIR,
     )
     .slice(0, MAX_TYPE_DEPTH);
 }
@@ -263,6 +332,9 @@ export function noteMatchesSearch(note: Note, query: string): boolean {
   if (!q) return true;
   return (
     note.content.toLowerCase().includes(q) ||
+    String(getNoteProperties(note.content)["grimoire-file-name"] ?? "")
+      .toLowerCase()
+      .includes(q) ||
     note.externalPath?.toLowerCase().includes(q) ||
     typeKey(noteTypePath(note)).toLowerCase().includes(q) ||
     fileStem(note.path).toLowerCase().includes(q)

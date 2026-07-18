@@ -17,7 +17,8 @@ const mocks = vi.hoisted(() => ({
   failWrites: new Set<string>(),
   writeNewGate: null as Promise<void> | null,
   onCloseRequested: vi.fn().mockResolvedValue(() => {}),
-  closeWindow: vi.fn(),
+  destroyWindow: vi.fn(),
+  listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -28,8 +29,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     onCloseRequested: mocks.onCloseRequested,
-    close: mocks.closeWindow,
+    destroy: mocks.destroyWindow,
   }),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: mocks.listen,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -80,15 +85,25 @@ vi.mock("@tauri-apps/plugin-fs", async () => {
 vi.mock("@/utils/toast", () => ({ showError: vi.fn() }));
 
 import {
+  attachFileToNote,
   closeExternalNote,
+  createNote,
+  deleteNoteForever,
   getNotes,
+  getNoteConflict,
   initStore,
   moveExternalNoteToVault,
   openExternalNotes,
   revealNoteInDesktop,
+  resolveNoteConflict,
+  restoreNote,
+  setNoteType,
+  synchronizeDesktopFiles,
+  trashNote,
   updateNoteBody,
 } from "./notes-store";
 import { isExternalNote, noteTypePath } from "@/lib/note-utils";
+import { getFileHubReference } from "@/lib/file-hubs";
 
 const storage = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -141,6 +156,7 @@ describe("external note store workflow", () => {
     );
     mocks.invoke.mockImplementation(
       async (command: string, args: Record<string, string>) => {
+        if (command === "take_pending_open_files") return [];
         if (command === "canonicalize_path") return realpath(args.path);
         if (command === "write_new_vault_file") {
           const gate = mocks.writeNewGate;
@@ -152,6 +168,12 @@ describe("external note store workflow", () => {
             encoding: "utf8",
             flag: "wx",
           });
+        }
+        if (command === "copy_file_into_vault") {
+          const target = join(args.root, args.relativeDirectory, args.fileName);
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, await readFile(args.source));
+          return [args.relativeDirectory, args.fileName].filter(Boolean).join("/");
         }
       },
     );
@@ -169,6 +191,18 @@ describe("external note store workflow", () => {
     expect(
       getNotes().filter((note) => note.path === "inbox/Welcome.md"),
     ).toHaveLength(1);
+    const vaultNote = getNotes().find(
+      (note) => note.path === "inbox/Welcome.md",
+    );
+    expect(vaultNote).toBeDefined();
+    await revealNoteInDesktop(vaultNote!.id);
+    expect(mocks.invoke).toHaveBeenCalledWith("reveal_in_file_manager", {
+      path: join(vault, "inbox", "Welcome.md"),
+    });
+
+    mocks.picked = join(vault, "inbox", "Welcome.md");
+    await expect(openExternalNotes()).resolves.toEqual([vaultNote?.id]);
+
     mocks.picked = [firstPath, secondPath];
     const ids = await openExternalNotes();
 
@@ -183,6 +217,37 @@ describe("external note store workflow", () => {
     updateNoteBody(ids[0], "# First external\n\nEdited outside the vault.\n");
     await waitFor(async () =>
       (await readFile(firstPath, "utf8")).includes("Edited outside the vault."),
+    );
+
+    await writeFile(
+      firstPath,
+      "# First external\n\nChanged safely by an AI tool.\n",
+      "utf8",
+    );
+    await synchronizeDesktopFiles();
+    expect(getNotes().find((note) => note.id === ids[0])?.content).toContain(
+      "Changed safely by an AI tool.",
+    );
+
+    updateNoteBody(
+      ids[0],
+      "# First external\n\nUnsaved change currently shown in Grimoire.\n",
+    );
+    await writeFile(
+      firstPath,
+      "# First external\n\nSimultaneous change from disk.\n",
+      "utf8",
+    );
+    await waitFor(() => getNoteConflict(ids[0]) !== null);
+    expect(await readFile(firstPath, "utf8")).toContain(
+      "Simultaneous change from disk.",
+    );
+    expect(getNoteConflict(ids[0])?.currentContent).toContain(
+      "Unsaved change currently shown in Grimoire.",
+    );
+    await resolveNoteConflict(ids[0], "disk");
+    expect(getNotes().find((note) => note.id === ids[0])?.content).toContain(
+      "Simultaneous change from disk.",
     );
 
     await revealNoteInDesktop(ids[0]);
@@ -240,7 +305,7 @@ describe("external note store workflow", () => {
     await expect(nodeStat(firstPath)).rejects.toThrow();
     await expect(
       readFile(join(vault, "research", "First external 2.md"), "utf8"),
-    ).resolves.toContain("Edited outside the vault.");
+    ).resolves.toContain("Simultaneous change from disk.");
     await expect(
       readFile(join(vault, "research", "First external.md"), "utf8"),
     ).resolves.toBe("# Unrelated file\n");
@@ -254,7 +319,7 @@ describe("external note store workflow", () => {
     const preventDefault = vi.fn();
     await closeHandler({ preventDefault });
     expect(preventDefault).toHaveBeenCalledOnce();
-    expect(mocks.closeWindow).toHaveBeenCalledOnce();
+    expect(mocks.destroyWindow).toHaveBeenCalledOnce();
     await expect(
       readFile(join(vault, "research", "First external 2.md"), "utf8"),
     ).resolves.toContain("Saved during shutdown.");
@@ -262,5 +327,56 @@ describe("external note store workflow", () => {
     expect(JSON.parse(storage.get("grimoire.externalPaths") ?? "[]")).toEqual([
       missingPath,
     ]);
+  });
+
+  it("keeps linked sources untouched and manages copied documents with their hub", async () => {
+    const document = join(root, "one", "Quarterly Review.pptx");
+    await writeFile(document, "presentation bytes");
+
+    const linked = await createNote(["inbox"], "# Linked presentation\n\nContext\n");
+    expect(linked).toBeDefined();
+    await expect(attachFileToNote(linked!.id, document, "local")).resolves.toEqual({
+      status: "attached",
+      noteId: linked!.id,
+    });
+    expect(getFileHubReference(getNotes().find((note) => note.id === linked!.id)!)).toMatchObject({
+      kind: "local",
+      managed: false,
+    });
+    await setNoteType(linked!.id, ["research"]);
+    await trashNote(linked!.id);
+    await restoreNote(linked!.id);
+    await expect(readFile(document, "utf8")).resolves.toBe("presentation bytes");
+
+    const managedDocument = join(root, "two", "Quarterly Review.pptx");
+    await writeFile(managedDocument, "managed presentation bytes");
+    const managed = await createNote(["inbox"], "# Managed presentation\n");
+    expect(managed).toBeDefined();
+    await expect(attachFileToNote(managed!.id, managedDocument, "copy")).resolves.toEqual({
+      status: "attached",
+      noteId: managed!.id,
+    });
+    let managedNote = getNotes().find((note) => note.id === managed!.id)!;
+    expect(getFileHubReference(managedNote)).toMatchObject({
+      kind: "vault",
+      path: "inbox/Quarterly Review.pptx",
+      managed: true,
+    });
+    await setNoteType(managed!.id, ["research"]);
+    managedNote = getNotes().find((note) => note.id === managed!.id)!;
+    expect(getFileHubReference(managedNote)?.path).toBe("research/Quarterly Review.pptx");
+    await expect(nodeStat(join(vault, "research", "Quarterly Review.pptx"))).resolves.toBeDefined();
+    await trashNote(managed!.id);
+    managedNote = getNotes().find((note) => note.id === managed!.id)!;
+    expect(getFileHubReference(managedNote)?.path).toBe(
+      ".trash/research/Quarterly Review.pptx",
+    );
+    await restoreNote(managed!.id);
+    await deleteNoteForever(managed!.id);
+    await expect(nodeStat(join(vault, "research", "Quarterly Review.pptx"))).rejects.toThrow();
+    await expect(readFile(document, "utf8")).resolves.toBe("presentation bytes");
+    await expect(readFile(managedDocument, "utf8")).resolves.toBe(
+      "managed presentation bytes",
+    );
   });
 });

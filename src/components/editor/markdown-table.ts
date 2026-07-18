@@ -1,0 +1,477 @@
+import { EditorSelection } from "@codemirror/state";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+
+export type TableAlignment = "left" | "center" | "right" | null;
+
+export interface MarkdownTableData {
+  headers: string[];
+  alignments: TableAlignment[];
+  rows: string[][];
+}
+
+export const MAX_TABLE_COLUMNS = 12;
+export const MAX_TABLE_ROWS = 50;
+
+function splitRow(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+
+  for (const character of line.trim()) {
+    if (escaped) {
+      cell += character === "|" ? "|" : `\\${character}`;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  if (escaped) cell += "\\";
+  cells.push(cell.trim());
+
+  if (line.trimStart().startsWith("|")) cells.shift();
+  if (line.trimEnd().endsWith("|")) cells.pop();
+  return cells;
+}
+
+function alignmentFor(delimiter: string): TableAlignment {
+  const value = delimiter.trim();
+  const left = value.startsWith(":");
+  const right = value.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  if (left) return "left";
+  return null;
+}
+
+export function parseMarkdownTable(markdown: string): MarkdownTableData | null {
+  const lines = markdown.split("\n");
+  if (lines.length < 2) return null;
+
+  const headers = splitRow(lines[0]);
+  const delimiters = splitRow(lines[1]);
+  if (
+    headers.length === 0 ||
+    delimiters.length !== headers.length ||
+    delimiters.some((cell) => !/^:?-{3,}:?$/.test(cell))
+  ) {
+    return null;
+  }
+
+  return {
+    headers,
+    alignments: delimiters.map(alignmentFor),
+    rows: lines.slice(2).map((line) => {
+      const cells = splitRow(line).slice(0, headers.length);
+      return [...cells, ...Array(Math.max(0, headers.length - cells.length)).fill("")];
+    }),
+  };
+}
+
+function setCellAlignment(cell: HTMLTableCellElement, alignment: TableAlignment) {
+  if (alignment) cell.style.textAlign = alignment;
+}
+
+function delimiterFor(alignment: TableAlignment): string {
+  if (alignment === "left") return ":---";
+  if (alignment === "center") return ":---:";
+  if (alignment === "right") return "---:";
+  return "---";
+}
+
+function markdownCell(value: string): string {
+  return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+}
+
+export function serializeMarkdownTable(data: MarkdownTableData): string {
+  const columns = data.headers.length;
+  const row = (cells: string[]) =>
+    `| ${Array.from(
+      { length: columns },
+      (_, index) => markdownCell(cells[index] ?? ""),
+    ).join(" | ")} |`;
+
+  return [
+    row(data.headers),
+    `| ${Array.from(
+      { length: columns },
+      (_, index) => delimiterFor(data.alignments[index] ?? null),
+    ).join(" | ")} |`,
+    ...data.rows.map(row),
+  ].join("\n");
+}
+
+export function appendMarkdownTableRow(
+  data: MarkdownTableData,
+): MarkdownTableData | null {
+  if (data.rows.length >= MAX_TABLE_ROWS) return null;
+  return {
+    ...data,
+    rows: [...data.rows, Array(data.headers.length).fill("")],
+  };
+}
+
+export function appendMarkdownTableColumn(
+  data: MarkdownTableData,
+): MarkdownTableData | null {
+  if (data.headers.length >= MAX_TABLE_COLUMNS) return null;
+  return {
+    headers: [...data.headers, `Column ${data.headers.length + 1}`],
+    alignments: [...data.alignments, null],
+    rows: data.rows.map((row) => [...row, ""]),
+  };
+}
+
+function tableCells(table: HTMLTableElement): HTMLTableCellElement[] {
+  return Array.from(table.querySelectorAll<HTMLTableCellElement>("th, td"));
+}
+
+function dataFromTable(
+  table: HTMLTableElement,
+  alignments: TableAlignment[],
+): MarkdownTableData {
+  const headers = Array.from(table.tHead?.rows[0]?.cells ?? []).map(
+    (cell) => cell.textContent ?? "",
+  );
+  const rows = Array.from(table.tBodies[0]?.rows ?? []).map((row) =>
+    Array.from(row.cells).map((cell) => cell.textContent ?? ""),
+  );
+  return { headers, alignments, rows };
+}
+
+function focusCell(cell: HTMLTableCellElement, selectContents = false) {
+  cell.focus();
+  const selection = window.getSelection();
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  if (!selectContents) range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function caretOffset(cell: HTMLTableCellElement): number | null {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !cell.contains(selection.anchorNode)) return null;
+  const range = selection.getRangeAt(0).cloneRange();
+  range.selectNodeContents(cell);
+  range.setEnd(selection.anchorNode!, selection.anchorOffset);
+  return range.toString().length;
+}
+
+function configureCell(
+  cell: HTMLTableCellElement,
+  alignment: TableAlignment,
+  readOnly: boolean,
+) {
+  cell.contentEditable = readOnly ? "false" : "plaintext-only";
+  cell.spellcheck = true;
+  cell.tabIndex = readOnly ? -1 : 0;
+  setCellAlignment(cell, alignment);
+}
+
+function focusTableCellAfterUpdate(
+  view: EditorView,
+  sourceFrom: number,
+  cellIndex: number,
+) {
+  requestAnimationFrame(() => {
+    const wrapper = view.dom.querySelector<HTMLElement>(
+      `.cm-markdown-table-wrapper[data-source-from="${sourceFrom}"]`,
+    );
+    const table = wrapper?.querySelector<HTMLTableElement>("table");
+    const cells = table ? tableCells(table) : [];
+    if (cells[cellIndex]) focusCell(cells[cellIndex], true);
+  });
+}
+
+function replaceTable(
+  wrapper: HTMLDivElement,
+  view: EditorView,
+  data: MarkdownTableData,
+  focusIndex: number,
+) {
+  const from = Number(wrapper.dataset.sourceFrom);
+  const to = Number(wrapper.dataset.sourceTo);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+  view.dispatch({
+    changes: { from, to, insert: serializeMarkdownTable(data) },
+    userEvent: "input",
+  });
+  focusTableCellAfterUpdate(view, from, focusIndex);
+}
+
+function createTableToolbar(
+  wrapper: HTMLDivElement,
+  view: EditorView,
+  data: MarkdownTableData,
+  readOnly: boolean,
+): HTMLDivElement {
+  const toolbar = document.createElement("div");
+  toolbar.className = "cm-markdown-table-toolbar";
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", "Table actions");
+
+  const addButton = (
+    label: string,
+    disabled: boolean,
+    disabledReason: string,
+    onClick: () => void,
+  ) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cm-markdown-table-action";
+    button.textContent = `+ ${label}`;
+    button.disabled = disabled || readOnly;
+    button.title = disabled ? disabledReason : `Add ${label.toLowerCase()}`;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    toolbar.appendChild(button);
+  };
+
+  addButton(
+    "Row",
+    data.rows.length >= MAX_TABLE_ROWS,
+    `Maximum of ${MAX_TABLE_ROWS} body rows reached`,
+    () => {
+      const table = wrapper.querySelector<HTMLTableElement>("table");
+      if (!table) return;
+      const current = dataFromTable(table, data.alignments);
+      const next = appendMarkdownTableRow(current);
+      if (next) {
+        replaceTable(wrapper, view, next, data.headers.length + data.rows.length * data.headers.length);
+      }
+    },
+  );
+  addButton(
+    "Column",
+    data.headers.length >= MAX_TABLE_COLUMNS,
+    `Maximum of ${MAX_TABLE_COLUMNS} columns reached`,
+    () => {
+      const table = wrapper.querySelector<HTMLTableElement>("table");
+      if (!table) return;
+      const current = dataFromTable(table, data.alignments);
+      const next = appendMarkdownTableColumn(current);
+      if (next) replaceTable(wrapper, view, next, data.headers.length);
+    },
+  );
+  return toolbar;
+}
+
+function installTableInteractions(wrapper: HTMLDivElement, view: EditorView) {
+  const table = wrapper.querySelector<HTMLTableElement>("table");
+  if (!table) return;
+
+  wrapper.addEventListener("input", (event) => {
+    if (!(event.target instanceof HTMLTableCellElement)) return;
+    const from = Number(wrapper.dataset.sourceFrom);
+    const to = Number(wrapper.dataset.sourceTo);
+    const alignments = JSON.parse(
+      wrapper.dataset.alignments ?? "[]",
+    ) as TableAlignment[];
+    const markdown = serializeMarkdownTable(dataFromTable(table, alignments));
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+    if (view.state.sliceDoc(from, to) === markdown) return;
+    view.dispatch({ changes: { from, to, insert: markdown }, userEvent: "input" });
+  });
+
+  wrapper.addEventListener("keydown", (event) => {
+    if (!(event.target instanceof HTMLTableCellElement)) return;
+    const cells = tableCells(table);
+    const index = cells.indexOf(event.target);
+    if (index < 0) return;
+    const columns = table.tHead?.rows[0]?.cells.length ?? 1;
+    let nextIndex: number | null = null;
+
+    if (event.key === "Tab") {
+      nextIndex = (index + (event.shiftKey ? -1 : 1) + cells.length) % cells.length;
+    } else if (event.key === "Enter") {
+      nextIndex = Math.min(cells.length - 1, index + columns);
+    } else if (event.key === "ArrowUp" && index >= columns) {
+      nextIndex = index - columns;
+    } else if (event.key === "ArrowDown" && index + columns < cells.length) {
+      nextIndex = index + columns;
+    } else if (event.key === "ArrowLeft" && caretOffset(event.target) === 0 && index > 0) {
+      nextIndex = index - 1;
+    } else if (
+      event.key === "ArrowRight" &&
+      caretOffset(event.target) === (event.target.textContent?.length ?? 0) &&
+      index + 1 < cells.length
+    ) {
+      nextIndex = index + 1;
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      const sourceTo = Number(wrapper.dataset.sourceTo);
+      view.dispatch({ selection: EditorSelection.cursor(sourceTo) });
+      view.focus();
+      return;
+    }
+
+    if (nextIndex == null || nextIndex === index) return;
+    event.preventDefault();
+    focusCell(cells[nextIndex]);
+  });
+}
+
+export class MarkdownTableWidget extends WidgetType {
+  constructor(
+    private readonly markdown: string,
+    private readonly sourcePosition: number,
+    private readonly readOnly: boolean,
+  ) {
+    super();
+  }
+
+  override eq(other: MarkdownTableWidget): boolean {
+    return (
+      other.markdown === this.markdown &&
+      other.sourcePosition === this.sourcePosition &&
+      other.readOnly === this.readOnly
+    );
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-markdown-table-wrapper";
+    wrapper.dataset.sourceFrom = String(this.sourcePosition);
+    wrapper.dataset.sourceTo = String(this.sourcePosition + this.markdown.length);
+
+    const data = parseMarkdownTable(this.markdown);
+    if (!data) return wrapper;
+    wrapper.dataset.alignments = JSON.stringify(data.alignments);
+    wrapper.dataset.readOnly = String(this.readOnly);
+
+    const table = document.createElement("table");
+    table.className = "cm-markdown-table";
+    table.setAttribute("aria-label", "Markdown table");
+
+    const head = table.createTHead();
+    const headerRow = head.insertRow();
+    data.headers.forEach((header, index) => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = header;
+      configureCell(cell, data.alignments[index], this.readOnly);
+      headerRow.appendChild(cell);
+    });
+
+    const body = table.createTBody();
+    data.rows.forEach((row) => {
+      const tableRow = body.insertRow();
+      row.forEach((value, index) => {
+        const cell = tableRow.insertCell();
+        cell.textContent = value;
+        configureCell(cell, data.alignments[index], this.readOnly);
+      });
+    });
+
+    const scrollArea = document.createElement("div");
+    scrollArea.className = "cm-markdown-table-scroll";
+    scrollArea.appendChild(table);
+    wrapper.appendChild(scrollArea);
+    wrapper.appendChild(createTableToolbar(wrapper, view, data, this.readOnly));
+    installTableInteractions(wrapper, view);
+    return wrapper;
+  }
+
+  override updateDOM(
+    dom: HTMLElement,
+    view: EditorView,
+    from: this,
+  ): boolean {
+    if (from.readOnly !== this.readOnly) return false;
+    const wrapper = dom as HTMLDivElement;
+    const table = wrapper.querySelector<HTMLTableElement>("table");
+    const data = parseMarkdownTable(this.markdown);
+    if (!table || !data) return false;
+    const cells = tableCells(table);
+    const values = [...data.headers, ...data.rows.flat()];
+    if (cells.length !== values.length) return false;
+
+    wrapper.dataset.sourceFrom = String(this.sourcePosition);
+    wrapper.dataset.sourceTo = String(this.sourcePosition + this.markdown.length);
+    wrapper.dataset.alignments = JSON.stringify(data.alignments);
+    cells.forEach((cell, index) => {
+      if (document.activeElement !== cell && cell.textContent !== values[index]) {
+        cell.textContent = values[index];
+      }
+      configureCell(
+        cell,
+        data.alignments[index % data.headers.length],
+        view.state.readOnly,
+      );
+    });
+    return true;
+  }
+}
+
+export function tableDecoration(
+  markdown: string,
+  sourcePosition: number,
+  readOnly: boolean,
+) {
+  return Decoration.replace({
+    widget: new MarkdownTableWidget(markdown, sourcePosition, readOnly),
+    block: true,
+  });
+}
+
+const MIN_ROWS = 1;
+
+function clampSize(value: number, minimum: number, maximum: number): number {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
+}
+
+/** Builds a GFM table with named headers and the requested number of body rows. */
+export function createMarkdownTable(columnCount: number, rowCount: number): string {
+  const columns = clampSize(columnCount, 1, MAX_TABLE_COLUMNS);
+  const rows = clampSize(rowCount, MIN_ROWS, MAX_TABLE_ROWS);
+  const headers = Array.from(
+    { length: columns },
+    (_, index) => `Column ${index + 1}`,
+  );
+  const bodyRow = `| ${Array(columns).fill(" ").join(" | ")} |`;
+
+  return [
+    `| ${headers.join(" | ")} |`,
+    `| ${headers.map((header) => "-".repeat(Math.max(3, header.length))).join(" | ")} |`,
+    ...Array(rows).fill(bodyRow),
+  ].join("\n");
+}
+
+/** Inserts a table and leaves the text caret on an editable line below it. */
+export function insertMarkdownTable(
+  view: EditorView,
+  columnCount = 3,
+  rowCount = 2,
+): boolean {
+  if (view.state.readOnly) return false;
+
+  const { from, to } = view.state.selection.main;
+  const before = view.state.sliceDoc(0, from);
+  const after = view.state.sliceDoc(to);
+  const leadingBreak = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
+  const table = createMarkdownTable(columnCount, rowCount);
+  // A GFM table can absorb the next non-pipe line as a body row, so a true
+  // blank-line boundary is required before placing the text caret below it.
+  const trailingBreak =
+    after.length === 0 || after.startsWith("\n") ? "\n\n" : "\n\n\n";
+  const insert = `${leadingBreak}${table}${trailingBreak}`;
+  const textLineStart = from + leadingBreak.length + table.length + 2;
+
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: EditorSelection.cursor(textLineStart),
+    scrollIntoView: true,
+  });
+  view.focus();
+  return true;
+}

@@ -3,6 +3,7 @@ import { effectiveProperties, type PropertySchemas } from "@/lib/properties";
 import {
   type Note,
   getOutgoingLinkTitles,
+  isArchived,
   isExternalNote,
   isTrashed,
   noteTitle,
@@ -48,11 +49,17 @@ export function getBacklinksGroupedByType(
   target: Note,
   notes: Note[],
   schemas: PropertySchemas,
+  includeArchived = false,
 ): Map<string, Note[]> {
   const targetTitle = noteTitle(target).toLowerCase();
   const groups = new Map<string, Note[]>();
   for (const note of notes) {
-    if (isExternalNote(note) || isTrashed(note) || note.id === target.id)
+    if (
+      isExternalNote(note) ||
+      isTrashed(note) ||
+      (!includeArchived && isArchived(note)) ||
+      note.id === target.id
+    )
       continue;
     const linksToTarget = getOutgoingTitles(note, schemas).some(
       (title) => title.toLowerCase() === targetTitle,

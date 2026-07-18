@@ -7,6 +7,7 @@ import {
   ViewUpdate,
 } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { type EditorState, type Extension } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
 import {
   autocompletion,
@@ -33,9 +34,21 @@ export const editorTheme = EditorView.theme({
     padding: "24px 32px 120px",
     lineHeight: "1.65",
     caretColor: ACCENT,
-    maxWidth: "46rem",
+    boxSizing: "border-box",
+    width: "var(--grim-note-width)",
+    maxWidth: "var(--grim-note-width)",
+    marginInline: "var(--grim-note-margin-inline)",
   },
   ".cm-line": { padding: "0" },
+  ".cm-title-line": {
+    color: TEXT,
+    fontSize: "1.55em",
+    fontWeight: "700",
+    lineHeight: "1.3",
+  },
+  // An explicit Markdown heading already has a syntax-highlight font size.
+  // Let the title line own the size so `# Title` does not scale twice.
+  ".cm-title-line *": { fontSize: "inherit !important" },
   ".cm-cursor": { borderLeftColor: ACCENT, borderLeftWidth: "2px" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
     backgroundColor: "rgb(var(--grim-accent) / 0.15) !important",
@@ -47,6 +60,14 @@ export const editorTheme = EditorView.theme({
   },
   ".cm-wikilink:hover": { textDecoration: "underline" },
   ".cm-wikilink-unresolved": { color: "rgb(var(--grim-link) / 0.55)" },
+  ".cm-external-link": {
+    color: LINK,
+    cursor: "pointer",
+    textDecoration: "underline",
+    textDecorationColor: "rgb(var(--grim-link) / 0.35)",
+    textUnderlineOffset: "2px",
+  },
+  ".cm-external-link:hover": { textDecorationColor: LINK },
   ".cm-inline-tag": {
     color: ACCENT,
     backgroundColor: "rgb(var(--grim-accent) / 0.08)",
@@ -103,6 +124,26 @@ export const editorTheme = EditorView.theme({
     color: "inherit",
   },
 });
+
+/** The body line Grimoire uses as the note title: its first non-empty line. */
+export function titleLineFrom(state: EditorState): number {
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber);
+    if (line.text.trim()) return line.from;
+  }
+
+  // Keep a new empty note title-sized before the user starts typing.
+  return state.doc.line(1).from;
+}
+
+/** Keeps the note title visually H1-sized without changing its Markdown. */
+export const titleLineExtension: Extension = EditorView.decorations.compute(
+  ["doc"],
+  (state) =>
+    Decoration.set([
+      Decoration.line({ class: "cm-title-line" }).range(titleLineFrom(state)),
+    ]),
+);
 
 export const markdownHighlighting = syntaxHighlighting(
   HighlightStyle.define([

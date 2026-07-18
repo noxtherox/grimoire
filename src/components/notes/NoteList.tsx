@@ -1,6 +1,11 @@
+import { useEffect, useMemo, useRef, useState } from "react";
 import { format, isToday, isYesterday } from "date-fns";
 import {
+  Archive,
+  ArchiveRestore,
   FolderSearch,
+  FileText,
+  FilePlus2,
   Pin,
   Plus,
   Search,
@@ -9,8 +14,18 @@ import {
   X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -20,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   type Note,
+  isArchived,
   isExternalNote,
   noteSnippet,
   noteTitle,
@@ -27,6 +43,12 @@ import {
   typeKey,
 } from "@/lib/note-utils";
 import type { NoteFilter } from "@/lib/filters";
+import type { NoteListFilters as NoteListFilterState } from "@/lib/filters";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   closeExternalNote,
   deleteNoteForever,
@@ -34,8 +56,14 @@ import {
   restoreNote,
   revealNoteInDesktop,
   toggleNotePinned,
+  toggleNoteArchived,
   trashNote,
 } from "@/store/notes-store";
+import { NoteListFilters } from "./NoteListFilters";
+import { fileExtension, getFileHubReference } from "@/lib/file-hubs";
+
+const INITIAL_NOTE_COUNT = 100;
+const NOTE_LOAD_INCREMENT = 50;
 
 function formatNoteDate(iso: string): string {
   const date = new Date(iso);
@@ -46,27 +74,52 @@ function formatNoteDate(iso: string): string {
 
 interface NoteListProps {
   notes: Note[];
+  filterOptions: Note[];
   filter: NoteFilter;
+  listFilters: NoteListFilterState;
   selectedNoteId: string | null;
   search: string;
   onSearchChange: (value: string) => void;
+  onListFiltersChange: (filters: NoteListFilterState) => void;
   onSelectNote: (id: string) => void;
   onCreateNote: () => void;
+  onCreateFile: () => void;
   onOpenExternalNotes: () => void;
 }
 
 export function NoteList({
   notes,
+  filterOptions,
   filter,
+  listFilters,
   selectedNoteId,
   search,
   onSearchChange,
+  onListFiltersChange,
   onSelectNote,
   onCreateNote,
+  onCreateFile,
   onOpenExternalNotes,
 }: NoteListProps) {
+  const [trashTarget, setTrashTarget] = useState<Note | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Note | null>(null);
+  const [closeExternalTarget, setCloseExternalTarget] = useState<Note | null>(
+    null,
+  );
+  const [visibleNoteCount, setVisibleNoteCount] = useState(INITIAL_NOTE_COUNT);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   const inTrash = filter.kind === "trash";
   const inExternal = filter.kind === "external";
+  const inFiles = filter.kind === "files";
+  const filterKey =
+    filter.kind === "type" ? `type:${filter.path.join("/")}` : filter.kind;
+  const listFilterKey = JSON.stringify(listFilters);
+  const visibleNotes = useMemo(
+    () => notes.slice(0, visibleNoteCount),
+    [notes, visibleNoteCount],
+  );
+  const hasMoreNotes = visibleNoteCount < notes.length;
   const heading =
     filter.kind === "type"
       ? filter.path.join(" / ")
@@ -74,7 +127,33 @@ export function NoteList({
         ? "All Notes"
         : filter.kind === "external"
           ? "External Notes"
+          : filter.kind === "files"
+            ? "Files"
           : "Trash";
+
+  useEffect(() => {
+    setVisibleNoteCount(INITIAL_NOTE_COUNT);
+    scrollContainerRef.current?.scrollTo({ top: 0 });
+  }, [filterKey, listFilterKey, search]);
+
+  useEffect(() => {
+    const root = scrollContainerRef.current;
+    const target = loadMoreRef.current;
+    if (!root || !target || !hasMoreNotes) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return;
+        setVisibleNoteCount((count) =>
+          Math.min(count + NOTE_LOAD_INCREMENT, notes.length),
+        );
+      },
+      { root },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMoreNotes, notes.length]);
 
   return (
     <div className="flex h-full flex-col bg-grim-surface">
@@ -96,15 +175,32 @@ export function NoteList({
             variant="ghost"
             size="icon"
             className="h-7 w-7"
-            title={inExternal ? "Open markdown file(s)" : "New note (⌘N)"}
-            onClick={inExternal ? onOpenExternalNotes : onCreateNote}
+            title={undefined}
+            onClick={() => {
+              if (inFiles) onCreateFile();
+              else if (inExternal) onOpenExternalNotes();
+              else onCreateNote();
+            }}
           >
-            <Plus size={16} />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex items-center">
+                  {inFiles ? <FilePlus2 size={16} /> : <Plus size={16} />}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {inFiles
+                  ? "Add a document to Files"
+                  : inExternal
+                    ? "Open markdown file(s)"
+                    : "New note (⌘N)"}
+              </TooltipContent>
+            </Tooltip>
           </Button>
         )}
       </div>
-      <div className="px-3 py-2">
-        <div className="relative">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 px-3 py-2">
+        <div className="relative min-w-0">
           <Search
             size={14}
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -112,25 +208,45 @@ export function NoteList({
           <Input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Search notes…"
+            placeholder={inFiles ? "Search files…" : "Search notes…"}
             className="h-8 bg-grim-editor pl-8 text-sm"
           />
         </div>
+        <NoteListFilters
+          notes={filterOptions}
+          showTypes={filter.kind === "all"}
+          showFileTypes={inFiles}
+          showArchivedToggle={!inTrash && !inExternal}
+          filters={listFilters}
+          onChange={onListFiltersChange}
+        />
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
         {notes.length === 0 && (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {inTrash
+            {search ||
+            listFilters.date ||
+            listFilters.showArchived ||
+            listFilters.typeKeys.length ||
+            listFilters.fileExtensions.length ||
+            listFilters.properties.length
+              ? "No notes match these filters."
+              : inTrash
               ? "Trash is empty."
               : inExternal
                 ? "Open markdown files from anywhere on your computer."
+                : inFiles
+                  ? "Files attached to notes will appear here."
                 : "No notes here yet."}
           </p>
         )}
-        {notes.map((note) => {
-          const title = noteTitle(note);
-          const snippet = noteSnippet(note);
+        {visibleNotes.map((note) => {
+          const noteName = noteTitle(note);
           const external = isExternalNote(note);
+          const archived = isArchived(note);
+          const fileHub = getFileHubReference(note);
+          const title = inFiles && fileHub ? fileHub.name : noteName;
+          const snippet = inFiles ? noteName : noteSnippet(note);
           const type = typeKey(noteTypePath(note));
           return (
             <ContextMenu key={note.id}>
@@ -145,8 +261,17 @@ export function NoteList({
                   )}
                 >
                   <div className="flex items-center gap-1.5">
+                    {fileHub && (
+                      <FileText size={12} className="shrink-0 text-grim-accent" />
+                    )}
                     {note.pinned && (
                       <Pin size={12} className="shrink-0 text-grim-accent" />
+                    )}
+                    {archived && (
+                      <Archive
+                        size={12}
+                        className="shrink-0 text-muted-foreground"
+                      />
                     )}
                     <span className="truncate text-sm font-medium">
                       {title}
@@ -163,7 +288,11 @@ export function NoteList({
                       className="h-4 max-w-[60%] rounded px-1.5 text-[10px] font-normal"
                     >
                       <span className="truncate">
-                        {external ? "external" : type || "unfiled"}
+                        {fileHub
+                          ? `${fileExtension(fileHub.name).toUpperCase()} · ${type || "unfiled"}`
+                          : external
+                            ? "external"
+                            : type || "unfiled"}
                       </span>
                     </Badge>
                     <span className="text-[11px] text-muted-foreground">
@@ -173,16 +302,15 @@ export function NoteList({
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent>
+                <ContextMenuItem
+                  onClick={() => void revealNoteInDesktop(note.id)}
+                >
+                  <FolderSearch size={14} className="mr-2" /> Reveal in Finder
+                </ContextMenuItem>
                 {external ? (
                   <>
                     <ContextMenuItem
-                      onClick={() => void revealNoteInDesktop(note.id)}
-                    >
-                      <FolderSearch size={14} className="mr-2" /> Reveal in
-                      desktop
-                    </ContextMenuItem>
-                    <ContextMenuItem
-                      onClick={() => void closeExternalNote(note.id)}
+                      onClick={() => setCloseExternalTarget(note)}
                     >
                       <X size={14} className="mr-2" /> Close note
                     </ContextMenuItem>
@@ -194,20 +322,28 @@ export function NoteList({
                     </ContextMenuItem>
                     <ContextMenuItem
                       className="text-destructive"
-                      onClick={() => void deleteNoteForever(note.id)}
+                      onClick={() => setDeleteTarget(note)}
                     >
                       <Trash2 size={14} className="mr-2" /> Delete forever
                     </ContextMenuItem>
                   </>
                 ) : (
                   <>
+                    <ContextMenuItem onClick={() => toggleNoteArchived(note.id)}>
+                      {archived ? (
+                        <ArchiveRestore size={14} className="mr-2" />
+                      ) : (
+                        <Archive size={14} className="mr-2" />
+                      )}
+                      {archived ? "Unarchive" : "Archive"}
+                    </ContextMenuItem>
                     <ContextMenuItem onClick={() => toggleNotePinned(note.id)}>
                       <Pin size={14} className="mr-2" />
                       {note.pinned ? "Unpin" : "Pin"}
                     </ContextMenuItem>
                     <ContextMenuItem
                       className="text-destructive"
-                      onClick={() => void trashNote(note.id)}
+                      onClick={() => setTrashTarget(note)}
                     >
                       <Trash2 size={14} className="mr-2" /> Move to trash
                     </ContextMenuItem>
@@ -217,7 +353,104 @@ export function NoteList({
             </ContextMenu>
           );
         })}
+        {hasMoreNotes && (
+          <div
+            ref={loadMoreRef}
+            className="flex h-12 items-center justify-center text-xs text-muted-foreground"
+            aria-live="polite"
+          >
+            Showing {visibleNotes.length} of {notes.length} notes
+          </div>
+        )}
       </div>
+      <AlertDialog
+        open={trashTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setTrashTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Move “{trashTarget ? noteTitle(trashTarget) : "this note"}” to
+              trash?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              You can restore this note later from Trash.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => {
+                if (trashTarget) void trashNote(trashTarget.id);
+              }}
+            >
+              Move to trash
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={closeExternalTarget !== null}
+        onOpenChange={(open) => !open && setCloseExternalTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Close “{closeExternalTarget
+                ? noteTitle(closeExternalTarget)
+                : "this note"}”?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Grimoire will stop tracking this external note. The file will be
+              saved and left in its current location.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (closeExternalTarget) {
+                  void closeExternalNote(closeExternalTarget.id);
+                }
+              }}
+            >
+              Close note
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete “{deleteTarget ? noteTitle(deleteTarget) : "this note"}” forever?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone.
+              {deleteTarget && getFileHubReference(deleteTarget)?.managed
+                ? ` The managed document “${getFileHubReference(deleteTarget)?.name}” will also be permanently deleted.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => {
+                if (deleteTarget) void deleteNoteForever(deleteTarget.id);
+              }}
+            >
+              Delete forever
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

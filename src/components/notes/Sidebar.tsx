@@ -1,24 +1,48 @@
 import { useState } from "react";
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
+  ChevronsLeft,
+  FileStack,
   Files,
+  GripVertical,
   Notebook,
   Pencil,
   Plus,
-  RefreshCw,
   Settings,
   Smile,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { GrimoireLogo } from "@/components/GrimoireLogo";
 import {
+  DEFAULT_TYPE,
   type Note,
   type TypeNode,
   buildTypeTree,
+  getAllTypePaths,
   isExternalNote,
   isTrashed,
   parseTypePath,
+  reorderTypeTree,
   typeKey,
 } from "@/lib/note-utils";
 import type { NoteFilter } from "@/lib/filters";
@@ -27,7 +51,6 @@ import {
   chooseVaultFolder,
   createType,
   deleteType,
-  reloadVault,
   renameType,
   setTypeIcon,
 } from "@/store/notes-store";
@@ -59,6 +82,7 @@ import { Input } from "@/components/ui/input";
 import { ThemeSettingsDialog } from "./ThemeSettingsDialog";
 import { TypeIcon } from "./TypeIcon";
 import { EmojiPickerDialog } from "./EmojiPickerDialog";
+import { getFileHubReference } from "@/lib/file-hubs";
 
 interface SidebarProps {
   notes: Note[];
@@ -66,10 +90,25 @@ interface SidebarProps {
   extraTypes: string[][];
   /** Custom icon per type key — types without one get the folder glyph. */
   typeIcons: TypeIcons;
+  /** Full type keys in the user's preferred order. */
+  typeOrder: string[];
   filter: NoteFilter;
   isDesktop: boolean;
   vaultLocation: string | null;
+  defaultNoteType: string[];
+  hideSubtypeNotes: boolean;
+  onDefaultNoteTypeChange: (typePath: string[]) => void;
+  onHideSubtypeNotesChange: (hidden: boolean) => void;
+  onTypeOrderChange: (order: string[]) => void;
   onFilterChange: (filter: NoteFilter) => void;
+  onCollapse: () => void;
+}
+
+function flattenTypeKeys(nodes: TypeNode[]): string[] {
+  return nodes.flatMap((node) => [
+    typeKey(node.path),
+    ...flattenTypeKeys(node.children),
+  ]);
 }
 
 function SidebarRow({
@@ -147,6 +186,7 @@ function TypeTreeRows({
   onRenameType,
   onDeleteType,
   onChangeIcon,
+  onReorder,
 }: {
   nodes: TypeNode[];
   depth: number;
@@ -158,59 +198,43 @@ function TypeTreeRows({
   onRenameType: (node: TypeNode) => void;
   onDeleteType: (node: TypeNode) => void;
   onChangeIcon: (node: TypeNode) => void;
+  onReorder: (
+    sourceKey: string,
+    targetKey: string,
+    placement: "before" | "after",
+  ) => void;
 }) {
   return (
-    <>
+    <SortableContext
+      items={nodes.map((node) => typeKey(node.path))}
+      strategy={verticalListSortingStrategy}
+    >
       {nodes.map((node) => {
         const key = typeKey(node.path);
         const isOpen = expanded.has(key);
-        const active = filter.kind === "type" && typeKey(filter.path) === key;
+        const index = nodes.indexOf(node);
         return (
           <div key={key}>
-            <ContextMenu>
-              <ContextMenuTrigger asChild>
-                <div>
-                  <SidebarRow
-                    active={active}
-                    onClick={() =>
-                      onFilterChange({ kind: "type", path: node.path })
-                    }
-                    icon={
-                      <TypeIcon
-                        icon={typeIcons[key]}
-                        open={isOpen && node.children.length > 0}
-                        size={15}
-                      />
-                    }
-                    label={node.name}
-                    count={node.count}
-                    depth={depth}
-                    chevron={
-                      node.children.length
-                        ? isOpen
-                          ? "open"
-                          : "closed"
-                        : "leaf"
-                    }
-                    onToggle={() => onToggle(key)}
-                  />
-                </div>
-              </ContextMenuTrigger>
-              <ContextMenuContent>
-                <ContextMenuItem onClick={() => onChangeIcon(node)}>
-                  <Smile size={14} className="mr-2" /> Change icon
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => onRenameType(node)}>
-                  <Pencil size={14} className="mr-2" /> Rename type
-                </ContextMenuItem>
-                <ContextMenuItem
-                  className="text-destructive"
-                  onClick={() => onDeleteType(node)}
-                >
-                  <Trash2 size={14} className="mr-2" /> Delete type
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
+            <SortableTypeRow
+              node={node}
+              depth={depth}
+              active={filter.kind === "type" && typeKey(filter.path) === key}
+              isOpen={isOpen}
+              typeIcon={typeIcons[key]}
+              canMoveUp={index > 0}
+              canMoveDown={index < nodes.length - 1}
+              onFilterChange={onFilterChange}
+              onToggle={onToggle}
+              onRenameType={onRenameType}
+              onDeleteType={onDeleteType}
+              onChangeIcon={onChangeIcon}
+              onMoveUp={() =>
+                onReorder(key, typeKey(nodes[index - 1].path), "before")
+              }
+              onMoveDown={() =>
+                onReorder(key, typeKey(nodes[index + 1].path), "after")
+              }
+            />
             {isOpen && node.children.length > 0 && (
               <TypeTreeRows
                 nodes={node.children}
@@ -223,12 +247,124 @@ function TypeTreeRows({
                 onRenameType={onRenameType}
                 onDeleteType={onDeleteType}
                 onChangeIcon={onChangeIcon}
+                onReorder={onReorder}
               />
             )}
           </div>
         );
       })}
-    </>
+    </SortableContext>
+  );
+}
+
+function SortableTypeRow({
+  node,
+  depth,
+  active,
+  isOpen,
+  typeIcon,
+  canMoveUp,
+  canMoveDown,
+  onFilterChange,
+  onToggle,
+  onRenameType,
+  onDeleteType,
+  onChangeIcon,
+  onMoveUp,
+  onMoveDown,
+}: {
+  node: TypeNode;
+  depth: number;
+  active: boolean;
+  isOpen: boolean;
+  typeIcon: TypeIcons[string];
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onFilterChange: (filter: NoteFilter) => void;
+  onToggle: (key: string) => void;
+  onRenameType: (node: TypeNode) => void;
+  onDeleteType: (node: TypeNode) => void;
+  onChangeIcon: (node: TypeNode) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}) {
+  const key = typeKey(node.path);
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: key });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn("relative group/type", isDragging && "z-20 opacity-70")}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+    >
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="relative">
+            <SidebarRow
+              active={active}
+              onClick={() => onFilterChange({ kind: "type", path: node.path })}
+              icon={
+                <TypeIcon
+                  icon={typeIcon}
+                  open={isOpen && node.children.length > 0}
+                  size={15}
+                />
+              }
+              label={node.name}
+              count={node.count}
+              depth={depth}
+              chevron={
+                node.children.length ? (isOpen ? "open" : "closed") : "leaf"
+              }
+              onToggle={() => onToggle(key)}
+            />
+            <button
+              ref={setActivatorNodeRef}
+              type="button"
+              aria-label={`Reorder ${node.name}`}
+              title={`Drag to reorder ${node.name}`}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              className="absolute right-0 top-1/2 flex h-7 w-6 -translate-y-1/2 touch-none cursor-grab items-center justify-center text-grim-sidebar-fg/35 opacity-0 transition-opacity hover:text-grim-sidebar-fg/80 active:cursor-grabbing group-hover/type:opacity-100 focus:opacity-100"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical size={13} aria-hidden="true" />
+            </button>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem disabled={!canMoveUp} onClick={onMoveUp}>
+            <ArrowUp size={14} className="mr-2" /> Move up
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!canMoveDown} onClick={onMoveDown}>
+            <ArrowDown size={14} className="mr-2" /> Move down
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => onChangeIcon(node)}>
+            <Smile size={14} className="mr-2" /> Change icon
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => onRenameType(node)}>
+            <Pencil size={14} className="mr-2" /> Rename type
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="text-destructive"
+            onClick={() => onDeleteType(node)}
+          >
+            <Trash2 size={14} className="mr-2" /> Delete type
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    </div>
   );
 }
 
@@ -236,27 +372,92 @@ export function Sidebar({
   notes,
   extraTypes,
   typeIcons,
+  typeOrder,
   filter,
   isDesktop,
   vaultLocation,
+  defaultNoteType,
+  hideSubtypeNotes,
+  onDefaultNoteTypeChange,
+  onHideSubtypeNotesChange,
+  onTypeOrderChange,
   onFilterChange,
+  onCollapse,
 }: SidebarProps) {
-  const tree = buildTypeTree(notes, extraTypes);
+  const tree = buildTypeTree(notes, extraTypes, typeOrder);
   const activeCount = notes.filter(
     (note) => !isExternalNote(note) && !isTrashed(note),
   ).length;
   const externalCount = notes.filter(isExternalNote).length;
+  const fileCount = notes.filter(
+    (note) =>
+      !isExternalNote(note) &&
+      !isTrashed(note) &&
+      getFileHubReference(note) !== null,
+  ).length;
   const trashCount = notes.filter((note) => isTrashed(note)).length;
+  const typeSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
 
   // null = not creating a type; otherwise the draft text in the inline input
   const [typeDraft, setTypeDraft] = useState<string | null>(null);
+
+  const reorderTypes = (
+    sourceKey: string,
+    targetKey: string,
+    placement: "before" | "after",
+  ) => {
+    const order = reorderTypeTree(tree, sourceKey, targetKey, placement);
+    if (order) onTypeOrderChange(order);
+  };
+
+  const handleTypeDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over) return;
+    const sourceKey = String(active.id);
+    const targetKey = String(over.id);
+    if (sourceKey === targetKey) return;
+    const parentOf = (key: string) => key.split("/").slice(0, -1).join("/");
+    if (parentOf(sourceKey) !== parentOf(targetKey)) return;
+
+    const orderedKeys = flattenTypeKeys(tree);
+    const placement =
+      orderedKeys.indexOf(sourceKey) < orderedKeys.indexOf(targetKey)
+        ? "after"
+        : "before";
+    reorderTypes(sourceKey, targetKey, placement);
+  };
 
   const submitNewType = async () => {
     const path = parseTypePath(typeDraft ?? "");
     setTypeDraft(null);
     if (!path.length) return;
+    const existingKeys = new Set(flattenTypeKeys(tree));
     const created = await createType(path);
-    if (created) onFilterChange({ kind: "type", path });
+    if (!created) return;
+
+    // Keep the current tree order as the baseline, then append every newly
+    // created level. This makes a new root type (and new nested levels) land
+    // at the bottom instead of being pulled into alphabetical fallback order.
+    const newKeys: string[] = [];
+    for (let depth = 1; depth <= path.length; depth++) {
+      const key = typeKey(path.slice(0, depth));
+      if (!existingKeys.has(key)) newKeys.push(key);
+    }
+    if (newKeys.length) {
+      const currentKeys = new Set(typeOrder);
+      const baseline = [
+        ...typeOrder,
+        ...flattenTypeKeys(tree).filter((key) => !currentKeys.has(key)),
+      ].filter((key) => !newKeys.includes(key));
+      onTypeOrderChange([...baseline, ...newKeys]);
+    }
+    onFilterChange({ kind: "type", path });
   };
 
   // Type pending a rename, or null when no dialog is open
@@ -280,6 +481,24 @@ export function Sidebar({
     if (!renamed) return;
     setRenameTarget(null);
     const oldKey = typeKey(oldPath);
+    const oldPrefix = `${oldKey}/`;
+    const newKey = typeKey(newPath);
+    onTypeOrderChange(
+      typeOrder.map((key) =>
+        key === oldKey
+          ? newKey
+          : key.startsWith(oldPrefix)
+            ? `${newKey}/${key.slice(oldPrefix.length)}`
+            : key,
+      ),
+    );
+    const defaultKey = typeKey(defaultNoteType);
+    if (defaultKey === oldKey || defaultKey.startsWith(`${oldKey}/`)) {
+      onDefaultNoteTypeChange([
+        ...newPath,
+        ...defaultNoteType.slice(oldPath.length),
+      ]);
+    }
     if (filter.kind === "type") {
       const activeKey = typeKey(filter.path);
       if (activeKey === oldKey || activeKey.startsWith(`${oldKey}/`)) {
@@ -303,6 +522,15 @@ export function Sidebar({
     setDeleteTarget(null);
     const deleted = await deleteType(deleteTarget.path);
     if (!deleted) return;
+    onTypeOrderChange(
+      typeOrder.filter(
+        (type) => type !== key && !type.startsWith(`${key}/`),
+      ),
+    );
+    const defaultKey = typeKey(defaultNoteType);
+    if (defaultKey === key || defaultKey.startsWith(`${key}/`)) {
+      onDefaultNoteTypeChange(DEFAULT_TYPE);
+    }
     const activeKey = filter.kind === "type" ? typeKey(filter.path) : null;
     if (activeKey && (activeKey === key || activeKey.startsWith(`${key}/`))) {
       onFilterChange({ kind: "all" });
@@ -337,15 +565,21 @@ export function Sidebar({
   return (
     <div className="flex h-full flex-col bg-grim-sidebar pt-4">
       <div className="flex items-center justify-between px-4 pb-3">
-        <h1 className="text-sm font-semibold tracking-wide text-grim-sidebar-fg/90">
-          📖 Grimoire
+        <h1 className="flex min-w-0 items-center gap-2 text-sm font-semibold tracking-wide text-grim-sidebar-fg/90">
+          <GrimoireLogo
+            alt=""
+            className="h-6 w-6 shrink-0 rounded-sm"
+          />
+          <span className="truncate">Grimoire</span>
         </h1>
         <button
-          onClick={() => void reloadVault()}
-          title="Reload vault from disk"
+          type="button"
+          onClick={onCollapse}
+          title="Collapse navigation sidebar"
+          aria-label="Collapse navigation sidebar"
           className="text-grim-sidebar-fg/50 transition-colors hover:text-grim-sidebar-fg/90"
         >
-          <RefreshCw size={13} />
+          <ChevronsLeft size={15} />
         </button>
       </div>
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-2">
@@ -357,13 +591,22 @@ export function Sidebar({
           count={activeCount}
         />
         {isDesktop && (
-          <SidebarRow
-            active={filter.kind === "external"}
-            onClick={() => onFilterChange({ kind: "external" })}
-            icon={<Files size={15} />}
-            label="External Notes"
-            count={externalCount}
-          />
+          <>
+            <SidebarRow
+              active={filter.kind === "external"}
+              onClick={() => onFilterChange({ kind: "external" })}
+              icon={<Files size={15} />}
+              label="External Notes"
+              count={externalCount}
+            />
+            <SidebarRow
+              active={filter.kind === "files"}
+              onClick={() => onFilterChange({ kind: "files" })}
+              icon={<FileStack size={15} />}
+              label="Files"
+              count={fileCount}
+            />
+          </>
         )}
         <div className="flex items-center justify-between pb-1 pl-3 pr-2 pt-4">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-grim-sidebar-fg/40">
@@ -398,18 +641,25 @@ export function Sidebar({
             />
           </form>
         )}
-        <TypeTreeRows
-          nodes={tree}
-          depth={0}
-          filter={filter}
-          expanded={expanded}
-          typeIcons={typeIcons}
-          onFilterChange={onFilterChange}
-          onToggle={toggle}
-          onRenameType={startRename}
-          onDeleteType={setDeleteTarget}
-          onChangeIcon={setIconTarget}
-        />
+        <DndContext
+          sensors={typeSensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleTypeDragEnd}
+        >
+          <TypeTreeRows
+            nodes={tree}
+            depth={0}
+            filter={filter}
+            expanded={expanded}
+            typeIcons={typeIcons}
+            onFilterChange={onFilterChange}
+            onToggle={toggle}
+            onRenameType={startRename}
+            onDeleteType={setDeleteTarget}
+            onChangeIcon={setIconTarget}
+            onReorder={reorderTypes}
+          />
+        </DndContext>
       </nav>
       <div className="space-y-0.5 border-t border-grim-sidebar-fg/10 p-2">
         <SidebarRow
@@ -435,7 +685,15 @@ export function Sidebar({
           </button>
         )}
       </div>
-      <ThemeSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <ThemeSettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        defaultNoteType={defaultNoteType}
+        hideSubtypeNotes={hideSubtypeNotes}
+        existingTypePaths={getAllTypePaths(notes, extraTypes)}
+        onDefaultNoteTypeChange={onDefaultNoteTypeChange}
+        onHideSubtypeNotesChange={onHideSubtypeNotesChange}
+      />
       <EmojiPickerDialog
         open={iconTarget !== null}
         typeName={iconTarget?.name ?? ""}

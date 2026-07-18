@@ -7,7 +7,9 @@ import {
   isExternalNote,
   normalizeFsPath,
   noteAbsolutePath,
+  noteContainingFolder,
   parseTypePath,
+  reorderTypeTree,
 } from "./note-utils";
 
 const vaultNote: Note = {
@@ -49,6 +51,10 @@ describe("external notes", () => {
     expect(noteAbsolutePath(vaultNote, "/vault/")).toBe(
       "/vault/work/Vault note.md",
     );
+    expect(noteContainingFolder(vaultNote, "/vault/")).toBe("/vault/work");
+    expect(noteContainingFolder(externalNote, "/vault")).toBe(
+      "/Users/test/Desktop",
+    );
   });
 
   it("normalizes Windows paths and rejects traversal type segments", () => {
@@ -62,5 +68,28 @@ describe("external notes", () => {
       "outside",
       "research",
     ]);
+    expect(parseTypePath("Work/Client Projects")).toEqual([
+      "Work",
+      "Client Projects",
+    ]);
+  });
+
+  it("orders types at each level and only reorders siblings", () => {
+    const notes: Note[] = [
+      { ...vaultNote, id: "a", path: "alpha/one/A.md" },
+      { ...vaultNote, id: "b", path: "alpha/two/B.md" },
+      { ...vaultNote, id: "c", path: "beta/C.md" },
+    ];
+    const tree = buildTypeTree(notes, [], ["beta", "alpha", "alpha/two"]);
+
+    expect(tree.map((node) => node.name)).toEqual(["beta", "alpha"]);
+    expect(tree[1].children.map((node) => node.name)).toEqual(["two", "one"]);
+    expect(reorderTypeTree(tree, "alpha/one", "alpha/two", "before")).toEqual([
+      "beta",
+      "alpha",
+      "alpha/one",
+      "alpha/two",
+    ]);
+    expect(reorderTypeTree(tree, "beta", "alpha/two", "before")).toBeNull();
   });
 });

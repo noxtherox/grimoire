@@ -8,7 +8,17 @@
   "permissions": [
     "core:default",
     "core:window:allow-close",
+    "core:window:allow-destroy",
     "dialog:default",
+    "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "/**" },
+        { "path": "$HOME/**" },
+        { "path": "**" }
+      ]
+    },
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:allow-read-file",
@@ -24,7 +34,15 @@
       "allow": [
         { "path": "**" },
         { "path": "/**" },
-        { "path": "$HOME/**" }
+        { "path": "$HOME/**" },
+        { "path": "**/.grimoire" },
+        { "path": "**/.grimoire/**" },
+        { "path": "/**/.grimoire" },
+        { "path": "/**/.grimoire/**" },
+        { "path": "**/.trash" },
+        { "path": "**/.trash/**" },
+        { "path": "/**/.trash" },
+        { "path": "/**/.trash/**" }
       ]
     }
   ]
