@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Command,
   CommandEmpty,
@@ -33,6 +34,9 @@ import {
   type PropertyType,
   effectiveProperties,
   inferPropertyType,
+  listPropertyValue,
+  listSelections,
+  normalizeListOptions,
   sanitizePropertyName,
   schemaKeyFor,
 } from "@/lib/properties";
@@ -55,6 +59,7 @@ import {
   useVault,
 } from "@/store/notes-store";
 import { cn } from "@/lib/utils";
+import { FILE_HUB_PROPERTY_KEYS } from "@/lib/file-hubs";
 
 const TYPE_ICONS: Record<PropertyType, typeof TypeIcon> = {
   text: TypeIcon,
@@ -124,26 +129,94 @@ function WrapTextarea({
 }
 
 function ListValueEditor({
-  initial,
+  def,
+  value,
   onCommit,
 }: {
-  initial: string;
+  def: PropertyDef;
+  value: PropertyValue | undefined;
   onCommit: (value: PropertyValue | null) => void;
 }) {
-  const [text, setText] = useState(initial);
+  const [open, setOpen] = useState(false);
+  const selected = listSelections(value);
+  const selectedKeys = new Set(selected.map((item) => item.toLowerCase()));
+  const options = normalizeListOptions(def.listOptions ?? []);
+  const available = options.filter(
+    (option) => !selectedKeys.has(option.toLowerCase()),
+  );
+  const multiple = def.listMultiple === true;
+
+  const remove = (option: string) => {
+    const next = selected.filter(
+      (item) => item.toLowerCase() !== option.toLowerCase(),
+    );
+    onCommit(listPropertyValue(next, multiple));
+  };
+
+  const pick = (option: string) => {
+    const next = multiple ? [...selected, option] : [option];
+    onCommit(listPropertyValue(next, multiple));
+    setOpen(false);
+  };
+
+  const showPicker = multiple || selected.length === 0;
+
   return (
-    <WrapTextarea
-      value={text}
-      placeholder="a, b, c"
-      onChange={setText}
-      onBlur={() => {
-        const items = text
-          .split(",")
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0);
-        onCommit(items.length ? items : null);
-      }}
-    />
+    <div className="flex min-h-6 flex-wrap items-center gap-1 px-0.5 py-0.5">
+      {selected.map((option) => (
+        <span
+          key={option.toLowerCase()}
+          className="inline-flex max-w-full items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-xs text-foreground"
+        >
+          <span className="truncate">{option}</span>
+          <button
+            type="button"
+            className="shrink-0 opacity-60 hover:opacity-100"
+            title={`Remove ${option}`}
+            aria-label={`Remove ${option}`}
+            onClick={() => remove(option)}
+          >
+            <X size={10} />
+          </button>
+        </span>
+      ))}
+      {showPicker && (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex h-5 items-center gap-0.5 rounded-full px-1.5 text-[11px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <Plus size={10} />
+              {selected.length ? "Add" : "Select"}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-56 p-0" align="start">
+            <Command>
+              <CommandInput placeholder="Search options…" />
+              <CommandList>
+                <CommandEmpty>
+                  {options.length
+                    ? "No matching options."
+                    : "No options configured."}
+                </CommandEmpty>
+                <CommandGroup>
+                  {available.map((option) => (
+                    <CommandItem
+                      key={option.toLowerCase()}
+                      value={option}
+                      onSelect={() => pick(option)}
+                    >
+                      {option}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      )}
+    </div>
   );
 }
 
@@ -355,8 +428,7 @@ function ValueEditor({
     );
   }
   if (type === "list") {
-    const text = Array.isArray(value) ? value.join(", ") : String(value ?? "");
-    return <ListValueEditor key={text} initial={text} onCommit={onCommit} />;
+    return <ListValueEditor def={def} value={value} onCommit={onCommit} />;
   }
   return (
     <WrapTextarea
@@ -377,6 +449,76 @@ interface DefFormProps {
   onDelete?: () => void;
 }
 
+function ListOptionsField({
+  options,
+  onChange,
+}: {
+  options: string[];
+  onChange: (options: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  const addDraft = () => {
+    const next = normalizeListOptions([...options, draft]);
+    if (next.length === options.length) return;
+    onChange(next);
+    setDraft("");
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <span className="text-xs text-muted-foreground">Options</span>
+      <div className="flex gap-1">
+        <Input
+          value={draft}
+          placeholder="Add an option"
+          className="h-7 min-w-0 text-xs"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              addDraft();
+            }
+          }}
+        />
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          className="h-7 w-7 shrink-0"
+          aria-label="Add list option"
+          disabled={!draft.trim()}
+          onClick={addDraft}
+        >
+          <Plus size={13} />
+        </Button>
+      </div>
+      {options.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {options.map((option) => (
+            <span
+              key={option.toLowerCase()}
+              className="inline-flex max-w-full items-center gap-1 rounded-full border bg-muted/50 px-1.5 py-0.5 text-[11px]"
+            >
+              <span className="truncate">{option}</span>
+              <button
+                type="button"
+                className="shrink-0 opacity-60 hover:opacity-100"
+                aria-label={`Delete ${option} option`}
+                onClick={() =>
+                  onChange(options.filter((candidate) => candidate !== option))
+                }
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DefForm({
   initial,
   submitLabel,
@@ -392,14 +534,23 @@ function DefForm({
   const [relationMultiple, setRelationMultiple] = useState(
     initial?.relationMultiple ?? false,
   );
+  const [listOptions, setListOptions] = useState(
+    normalizeListOptions(initial?.listOptions ?? []),
+  );
+  const [listMultiple, setListMultiple] = useState(
+    initial?.listMultiple ?? false,
+  );
   const clean = sanitizePropertyName(name);
+  const canSubmit = Boolean(
+    clean && (type !== "list" || listOptions.length > 0),
+  );
 
   return (
     <form
       className="space-y-2"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!clean) return;
+        if (!canSubmit) return;
         onSubmit(
           type === "relation"
             ? {
@@ -408,7 +559,9 @@ function DefForm({
                 relationTypeKey: relationTypeKey || undefined,
                 relationMultiple,
               }
-            : { name: clean, type },
+            : type === "list"
+              ? { name: clean, type, listOptions, listMultiple }
+              : { name: clean, type },
         );
       }}
     >
@@ -422,7 +575,7 @@ function DefForm({
       <select
         value={type}
         onChange={(e) => setType(e.target.value as PropertyType)}
-        className="h-7 w-full rounded-md border border-input bg-white px-2 text-xs"
+        className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground"
       >
         {PROPERTY_TYPES.map((option) => (
           <option key={option.value} value={option.value}>
@@ -435,7 +588,7 @@ function DefForm({
           <select
             value={relationTypeKey}
             onChange={(e) => setRelationTypeKey(e.target.value)}
-            className="h-7 w-full rounded-md border border-input bg-white px-2 text-xs"
+            className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground"
           >
             <option value="">Any type</option>
             {existingTypePaths.map((path) => {
@@ -459,12 +612,30 @@ function DefForm({
           </label>
         </>
       )}
+      {type === "list" && (
+        <>
+          <ListOptionsField options={listOptions} onChange={setListOptions} />
+          <label className="flex items-center justify-between gap-3 px-0.5 text-xs text-muted-foreground">
+            <span>Allow multiple options</span>
+            <Switch
+              checked={listMultiple}
+              onCheckedChange={setListMultiple}
+              aria-label="Allow multiple list options"
+            />
+          </label>
+          {listOptions.length === 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              Add at least one option to continue.
+            </p>
+          )}
+        </>
+      )}
       <div className="flex items-center gap-2">
         <Button
           type="submit"
           size="sm"
           className="h-7 text-xs"
-          disabled={!clean}
+          disabled={!canSubmit}
         >
           {submitLabel}
         </Button>
@@ -516,7 +687,9 @@ export function PropertiesSection({
   // frontmatter keys not covered by the type's definitions (ad-hoc properties)
   const covered = new Set(effective.map((def) => def.name.toLowerCase()));
   const extras = Object.entries(values).filter(
-    ([key]) => !covered.has(key.toLowerCase()),
+    ([key]) =>
+      !covered.has(key.toLowerCase()) &&
+      !FILE_HUB_PROPERTY_KEYS.has(key.toLowerCase()),
   );
 
   const valueFor = (name: string): PropertyValue | undefined => {
@@ -627,8 +800,20 @@ export function PropertiesSection({
                     className="h-7 w-full justify-start text-xs"
                     onClick={() => {
                       const name = sanitizePropertyName(key);
-                      if (name)
-                        addTypeProperty(topKey, { name, type: inferredType });
+                      if (name) {
+                        addTypeProperty(
+                          topKey,
+                          inferredType === "list"
+                            ? {
+                                name,
+                                type: inferredType,
+                                listOptions: listSelections(value),
+                                listMultiple:
+                                  Array.isArray(value) && value.length > 1,
+                              }
+                            : { name, type: inferredType },
+                        );
+                      }
                       setEditing(null);
                     }}
                   >

@@ -60,6 +60,8 @@
     --grim-surface: 249 248 246;
     --grim-sidebar-bg: 31 31 35;
     --grim-sidebar-fg: 228 228 231;
+    --grim-note-width: 75%;
+    --grim-note-margin-inline: auto;
   }
 
   .dark {
@@ -101,6 +103,20 @@
   }
 }
 
+@layer components {
+  .grimoire-logo-dark {
+    display: none;
+  }
+
+  :root[data-grim-sidebar-tone="dark"] .grimoire-logo-light {
+    display: none;
+  }
+
+  :root[data-grim-sidebar-tone="dark"] .grimoire-logo-dark {
+    display: block;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -109,5 +125,34 @@
   body {
     @apply bg-background;
     color: rgb(var(--grim-text));
+  }
+
+  .mobile-grimoire-dark {
+    --grim-accent: 239 104 96;
+    --grim-link: 124 175 255;
+    --grim-text: 238 237 234;
+    --grim-editor-bg: 24 24 24;
+    --grim-surface: 24 24 24;
+    --grim-sidebar-bg: 15 15 15;
+    --grim-sidebar-fg: 238 237 234;
+  }
+
+  .mobile-note-editor .cm-editor,
+  .mobile-note-editor .cm-scroller,
+  .mobile-note-editor .cm-content {
+    width: 100%;
+    max-width: none;
+  }
+
+  .mobile-note-editor .cm-content {
+    box-sizing: border-box;
+  }
+
+  .mobile-note-editor .cm-scroller {
+    scrollbar-width: none;
+  }
+
+  .mobile-note-editor .cm-scroller::-webkit-scrollbar {
+    display: none;
   }
 }

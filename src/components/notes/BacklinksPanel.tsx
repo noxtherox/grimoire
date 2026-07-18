@@ -1,5 +1,7 @@
-import { Folder, Link2, Maximize2, Minimize2 } from "lucide-react";
+import { useState } from "react";
+import { Archive, Folder, Link2, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { PropertiesSection } from "./PropertiesSection";
 import { getBacklinksGroupedByType } from "@/lib/links";
 import { type Note, isTrashed, noteSnippet, noteTitle } from "@/lib/note-utils";
@@ -23,7 +25,13 @@ export function BacklinksPanel({
   expanded,
   onToggleExpanded,
 }: BacklinksPanelProps) {
-  const groups = getBacklinksGroupedByType(note, allNotes, schemas);
+  const [showArchived, setShowArchived] = useState(false);
+  const groups = getBacklinksGroupedByType(
+    note,
+    allNotes,
+    schemas,
+    showArchived,
+  );
   const total = [...groups.values()].reduce(
     (sum, group) => sum + group.length,
     0,
@@ -55,14 +63,26 @@ export function BacklinksPanel({
           expanded={expanded}
         />
       )}
-      <div className="flex items-center gap-1.5 border-b border-border/60 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        <Link2 size={13} />
-        Backlinks
-        {total > 0 && (
-          <span className="rounded-full bg-muted px-1.5 tabular-nums">
-            {total}
-          </span>
-        )}
+      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <Link2 size={13} />
+          Backlinks
+          {total > 0 && (
+            <span className="rounded-full bg-muted px-1.5 tabular-nums">
+              {total}
+            </span>
+          )}
+        </div>
+        <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Archive size={12} />
+          <span>Archived</span>
+          <Switch
+            checked={showArchived}
+            onCheckedChange={setShowArchived}
+            aria-label="Show archived backlinks"
+            className="scale-75"
+          />
+        </label>
       </div>
       <div className="min-h-0 flex-1 px-4 py-3">
         {total === 0 ? (
