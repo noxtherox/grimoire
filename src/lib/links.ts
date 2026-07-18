@@ -30,6 +30,20 @@ export function getOutgoingRelationTitles(
   return titles;
 }
 
+/** Whether `source` points to `target` through any relation property. */
+export function hasRelationTo(
+  source: Note,
+  target: Note,
+  schemas: PropertySchemas,
+): boolean {
+  const targetTitle = noteTitle(target).toLowerCase();
+  return getOutgoingRelationTitles(
+    source.content,
+    noteTypePath(source),
+    schemas,
+  ).some((title) => title.toLowerCase() === targetTitle);
+}
+
 /** All titles this note links to: body wikilinks plus relation properties. */
 export function getOutgoingTitles(
   note: Note,
@@ -52,6 +66,11 @@ export function getBacklinksGroupedByType(
   includeArchived = false,
 ): Map<string, Note[]> {
   const targetTitle = noteTitle(target).toLowerCase();
+  const targetRelationTitles = new Set(
+    getOutgoingRelationTitles(target.content, noteTypePath(target), schemas).map(
+      (title) => title.toLowerCase(),
+    ),
+  );
   const groups = new Map<string, Note[]>();
   for (const note of notes) {
     if (
@@ -61,10 +80,21 @@ export function getBacklinksGroupedByType(
       note.id === target.id
     )
       continue;
-    const linksToTarget = getOutgoingTitles(note, schemas).some(
+    const bodyLinksToTarget = getOutgoingLinkTitles(note.content).some(
       (title) => title.toLowerCase() === targetTitle,
     );
-    if (!linksToTarget) continue;
+    const relationLinksToTarget = getOutgoingRelationTitles(
+      note.content,
+      noteTypePath(note),
+      schemas,
+    ).some((title) => title.toLowerCase() === targetTitle);
+    const reciprocalRelation =
+      relationLinksToTarget &&
+      targetRelationTitles.has(noteTitle(note).toLowerCase());
+    // A reciprocal relation is already shown in Properties. Keep body mentions,
+    // since they provide separate context even when the two notes are related.
+    if (!bodyLinksToTarget && (!relationLinksToTarget || reciprocalRelation))
+      continue;
     const key = typeKey(noteTypePath(note));
     const group = groups.get(key) ?? [];
     group.push(note);

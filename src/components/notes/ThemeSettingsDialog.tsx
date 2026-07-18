@@ -5,6 +5,7 @@ import {
   MapPin,
   Plus,
   RotateCcw,
+  Save,
   Trash2,
 } from "lucide-react";
 import {
@@ -26,14 +27,25 @@ import {
 } from "@/components/ui/select";
 import {
   DEFAULT_THEME,
+  MAX_SAVED_THEME_NAME_LENGTH,
   type GrimoireTheme,
   THEME_PRESETS,
   THEME_TOKENS,
   applyTheme,
+  deleteSavedTheme,
   isValidHex,
+  loadSavedThemes,
   loadTheme,
+  saveNamedTheme,
   saveTheme,
 } from "@/lib/theme";
+import {
+  DEFAULT_INTERFACE_ZOOM,
+  INTERFACE_ZOOM_OPTIONS,
+  loadInterfaceZoom,
+  saveInterfaceZoom,
+  type InterfaceZoom,
+} from "@/lib/interface-preferences";
 import { DEFAULT_TYPE, noteTitle, typeKey } from "@/lib/note-utils";
 import {
   DEFAULT_NOTE_ALIGNMENT,
@@ -105,6 +117,10 @@ export function ThemeSettingsDialog({
   onHideSubtypeNotesChange,
 }: ThemeSettingsDialogProps) {
   const [theme, setTheme] = useState<GrimoireTheme>(loadTheme);
+  const [savedThemes, setSavedThemes] = useState(loadSavedThemes);
+  const [themeName, setThemeName] = useState("");
+  const [interfaceZoom, setInterfaceZoom] =
+    useState<InterfaceZoom>(loadInterfaceZoom);
   const [noteWidth, setNoteWidth] = useState<NoteWidth>(loadNoteWidth);
   const [noteAlignment, setNoteAlignment] =
     useState<NoteAlignment>(loadNoteAlignment);
@@ -115,6 +131,8 @@ export function ThemeSettingsDialog({
   useEffect(() => {
     if (open) {
       setTheme(loadTheme());
+      setSavedThemes(loadSavedThemes());
+      setInterfaceZoom(loadInterfaceZoom());
       setNoteWidth(loadNoteWidth());
       setNoteAlignment(loadNoteAlignment());
     }
@@ -131,6 +149,15 @@ export function ThemeSettingsDialog({
   };
 
   const defaultTypeKey = typeKey(defaultNoteType);
+  const cleanThemeName = themeName.trim();
+  const hasBuiltInName = THEME_PRESETS.some(
+    (preset) =>
+      preset.name.toLocaleLowerCase() === cleanThemeName.toLocaleLowerCase(),
+  );
+  const replacesSavedTheme = savedThemes.some(
+    (saved) =>
+      saved.name.toLocaleLowerCase() === cleanThemeName.toLocaleLowerCase(),
+  );
   const typeOptions = [
     DEFAULT_TYPE,
     ...existingTypePaths,
@@ -294,7 +321,38 @@ export function ThemeSettingsDialog({
             Appearance
           </p>
           <div className="mb-5 rounded-lg border border-border p-3">
-            <label htmlFor="note-width" className="block text-sm font-medium">
+            <label
+              htmlFor="interface-zoom"
+              className="block text-sm font-medium"
+            >
+              Interface zoom
+            </label>
+            <p className="mb-3 mt-0.5 text-xs text-muted-foreground">
+              Scales text, controls, icons, and the rest of the interface.
+            </p>
+            <Select
+              value={String(interfaceZoom)}
+              onValueChange={(value) => {
+                const zoom = Number(value) as InterfaceZoom;
+                setInterfaceZoom(zoom);
+                saveInterfaceZoom(zoom);
+              }}
+            >
+              <SelectTrigger id="interface-zoom">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {INTERFACE_ZOOM_OPTIONS.map((zoom) => (
+                  <SelectItem key={zoom} value={String(zoom)}>
+                    {zoom}%{zoom === DEFAULT_INTERFACE_ZOOM ? " (Default)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <label
+              htmlFor="note-width"
+              className="mt-4 block text-sm font-medium"
+            >
               Note width
             </label>
             <p className="mb-3 mt-0.5 text-xs text-muted-foreground">
@@ -347,6 +405,7 @@ export function ThemeSettingsDialog({
           <div className="flex flex-wrap gap-2 pb-4">
             {THEME_PRESETS.map((preset) => (
               <button
+                type="button"
                 key={preset.name}
                 onClick={() => update(preset.theme)}
                 className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs transition-colors hover:bg-muted"
@@ -368,6 +427,53 @@ export function ThemeSettingsDialog({
               </button>
             ))}
           </div>
+          {savedThemes.length > 0 && (
+            <div className="pb-4">
+              <p className="pb-2 text-xs font-medium text-muted-foreground">
+                Saved themes
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {savedThemes.map((saved) => (
+                  <div
+                    key={saved.name}
+                    className="flex items-center overflow-hidden rounded-full border border-border"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => update(saved.theme)}
+                      className="flex items-center gap-1.5 py-1 pl-2.5 pr-2 text-xs transition-colors hover:bg-muted"
+                    >
+                      <span className="flex overflow-hidden rounded-full border border-black/10">
+                        {[
+                          saved.theme.sidebarBg,
+                          saved.theme.surface,
+                          saved.theme.accent,
+                        ].map((color) => (
+                          <span
+                            key={color}
+                            className="h-3 w-3"
+                            style={{ backgroundColor: color }}
+                          />
+                        ))}
+                      </span>
+                      {saved.name}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete saved theme ${saved.name}`}
+                      title={`Delete ${saved.name}`}
+                      onClick={() =>
+                        setSavedThemes(deleteSavedTheme(saved.name))
+                      }
+                      className="border-l border-border px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="space-y-1">
             {THEME_TOKENS.map((token) => (
               <div
@@ -399,6 +505,50 @@ export function ThemeSettingsDialog({
               </div>
             ))}
           </div>
+          <div className="mt-3 rounded-md border border-border p-3">
+            <label htmlFor="theme-name" className="text-sm font-medium">
+              Save these colours as a theme
+            </label>
+            <p className="mb-2 mt-0.5 text-xs text-muted-foreground">
+              Your saved theme will appear above with the built-in presets.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                id="theme-name"
+                value={themeName}
+                maxLength={MAX_SAVED_THEME_NAME_LENGTH}
+                onChange={(event) => setThemeName(event.target.value)}
+                placeholder="Theme name"
+                className="h-8 text-xs"
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    cleanThemeName &&
+                    !hasBuiltInName
+                  ) {
+                    setSavedThemes(saveNamedTheme(cleanThemeName, theme));
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 shrink-0 gap-1.5 text-xs"
+                disabled={!cleanThemeName || hasBuiltInName}
+                onClick={() =>
+                  setSavedThemes(saveNamedTheme(cleanThemeName, theme))
+                }
+              >
+                <Save size={13} />
+                {replacesSavedTheme ? "Update theme" : "Save theme"}
+              </Button>
+            </div>
+            {hasBuiltInName && (
+              <p className="mt-1.5 text-xs text-destructive">
+                Choose a name that is different from a built-in theme.
+              </p>
+            )}
+          </div>
           <div className="flex justify-end pt-3">
             <Button
               variant="outline"
@@ -406,6 +556,8 @@ export function ThemeSettingsDialog({
               className="gap-1.5"
               onClick={() => {
                 update(DEFAULT_THEME);
+                setInterfaceZoom(DEFAULT_INTERFACE_ZOOM);
+                saveInterfaceZoom(DEFAULT_INTERFACE_ZOOM);
                 setNoteWidth(DEFAULT_NOTE_WIDTH);
                 saveNoteWidth(DEFAULT_NOTE_WIDTH);
                 setNoteAlignment(DEFAULT_NOTE_ALIGNMENT);

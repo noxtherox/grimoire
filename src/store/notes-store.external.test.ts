@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   failWrites: new Set<string>(),
   writeNewGate: null as Promise<void> | null,
+  readTextGatePath: null as string | null,
+  readTextGate: null as Promise<void> | null,
+  onReadTextGate: null as (() => void) | null,
   onCloseRequested: vi.fn().mockResolvedValue(() => {}),
   destroyWindow: vi.fn(),
   listen: vi.fn().mockResolvedValue(() => {}),
@@ -58,7 +61,19 @@ vi.mock("@tauri-apps/plugin-fs", async () => {
         isFile: entry.isFile(),
       })),
     readFile: async (path: string) => new Uint8Array(await fs.readFile(path)),
-    readTextFile: (path: string) => fs.readFile(path, "utf8"),
+    readTextFile: async (path: string) => {
+      const content = await fs.readFile(path, "utf8");
+      if (path === mocks.readTextGatePath && mocks.readTextGate) {
+        const gate = mocks.readTextGate;
+        const onGate = mocks.onReadTextGate;
+        mocks.readTextGatePath = null;
+        mocks.readTextGate = null;
+        mocks.onReadTextGate = null;
+        onGate?.();
+        await gate;
+      }
+      return content;
+    },
     remove: (path: string, options?: { recursive?: boolean }) =>
       fs.rm(path, { force: true, recursive: options?.recursive ?? false }),
     rename: (from: string, to: string) => fs.rename(from, to),
@@ -195,6 +210,35 @@ describe("external note store workflow", () => {
       (note) => note.path === "inbox/Welcome.md",
     );
     expect(vaultNote).toBeDefined();
+
+    let releaseStaleScan!: () => void;
+    let staleScanStarted!: () => void;
+    const staleScanBlocked = new Promise<void>((resolve) => {
+      staleScanStarted = resolve;
+    });
+    mocks.readTextGatePath = join(vault, "inbox", "Welcome.md");
+    mocks.readTextGate = new Promise<void>((resolve) => {
+      releaseStaleScan = resolve;
+    });
+    mocks.onReadTextGate = staleScanStarted;
+    const staleScan = synchronizeDesktopFiles();
+    await staleScanBlocked;
+    updateNoteBody(
+      vaultNote!.id,
+      "# Welcome\n\nWritten in Grimoire while a disk scan was running.\n",
+    );
+    await waitFor(async () =>
+      (await readFile(join(vault, "inbox", "Welcome.md"), "utf8")).includes(
+        "Written in Grimoire",
+      ),
+    );
+    releaseStaleScan();
+    await staleScan;
+    expect(getNoteConflict(vaultNote!.id)).toBeNull();
+    expect(getNotes().find((note) => note.id === vaultNote!.id)?.content).toContain(
+      "Written in Grimoire",
+    );
+
     await revealNoteInDesktop(vaultNote!.id);
     expect(mocks.invoke).toHaveBeenCalledWith("reveal_in_file_manager", {
       path: join(vault, "inbox", "Welcome.md"),

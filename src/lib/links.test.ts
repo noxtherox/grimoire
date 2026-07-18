@@ -49,4 +49,63 @@ describe("backlinks", () => {
       "active",
     ]);
   });
+
+  it("hides reciprocal relation backlinks across different properties", () => {
+    const company = note(
+      "company",
+      "companies/acme.md",
+      "---\nPeople: [Sara Holm]\n---\n# Acme",
+    );
+    const person = note(
+      "person",
+      "people/sara.md",
+      "---\nCompanies: Acme\n---\n# Sara Holm",
+    );
+    const schemas = {
+      companies: [{ name: "People", type: "relation" as const }],
+      people: [{ name: "Companies", type: "relation" as const }],
+    };
+
+    const groups = getBacklinksGroupedByType(company, [company, person], schemas);
+    expect([...groups.values()].flat()).toEqual([]);
+  });
+
+  it("keeps one-way relation backlinks", () => {
+    const company = note("company", "companies/acme.md", "# Acme");
+    const person = note(
+      "person",
+      "people/sara.md",
+      "---\nCompanies: Acme\n---\n# Sara Holm",
+    );
+    const schemas = {
+      people: [{ name: "Companies", type: "relation" as const }],
+    };
+
+    const groups = getBacklinksGroupedByType(company, [company, person], schemas);
+    expect([...groups.values()].flat().map((item) => item.id)).toEqual([
+      "person",
+    ]);
+  });
+
+  it("keeps a body backlink even when the notes also have reciprocal relations", () => {
+    const company = note(
+      "company",
+      "companies/acme.md",
+      "---\nPeople: Sara Holm\n---\n# Acme",
+    );
+    const person = note(
+      "person",
+      "people/sara.md",
+      "---\nCompanies: Acme\n---\n# Sara Holm\n\nDiscussed at [[Acme]].",
+    );
+    const schemas = {
+      companies: [{ name: "People", type: "relation" as const }],
+      people: [{ name: "Companies", type: "relation" as const }],
+    };
+
+    const groups = getBacklinksGroupedByType(company, [company, person], schemas);
+    expect([...groups.values()].flat().map((item) => item.id)).toEqual([
+      "person",
+    ]);
+  });
 });

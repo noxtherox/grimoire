@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ArrowLeftRight,
   Calendar,
   CheckSquare,
   Hash,
@@ -31,6 +32,7 @@ import { type PropertyValue, getNoteProperties } from "@/lib/frontmatter";
 import {
   PROPERTY_TYPES,
   type PropertyDef,
+  type PropertySchemas,
   type PropertyType,
   effectiveProperties,
   inferPropertyType,
@@ -60,6 +62,7 @@ import {
 } from "@/store/notes-store";
 import { cn } from "@/lib/utils";
 import { FILE_HUB_PROPERTY_KEYS } from "@/lib/file-hubs";
+import { hasRelationTo } from "@/lib/links";
 
 const TYPE_ICONS: Record<PropertyType, typeof TypeIcon> = {
   text: TypeIcon,
@@ -76,7 +79,8 @@ interface ValueEditorProps {
   def: PropertyDef;
   value: PropertyValue | undefined;
   allNotes: Note[];
-  currentNoteId: string;
+  currentNote: Note;
+  schemas: PropertySchemas;
   onOpenNote: (id: string) => void;
   onCommit: (value: PropertyValue | null) => void;
 }
@@ -223,11 +227,13 @@ function ListValueEditor({
 function RelationChip({
   title,
   note,
+  reciprocal,
   onOpenNote,
   onRemove,
 }: {
   title: string;
   note: Note | undefined;
+  reciprocal: boolean;
   onOpenNote: (id: string) => void;
   onRemove: () => void;
 }) {
@@ -254,6 +260,14 @@ function RelationChip({
           {title}
         </span>
       )}
+      {reciprocal && (
+        <ArrowLeftRight
+          size={10}
+          className="shrink-0 opacity-70"
+          aria-label="Linked both ways"
+          title="Linked both ways"
+        />
+      )}
       <button
         type="button"
         className="shrink-0 opacity-60 hover:opacity-100"
@@ -270,14 +284,16 @@ function RelationValueEditor({
   def,
   value,
   allNotes,
-  currentNoteId,
+  currentNote,
+  schemas,
   onOpenNote,
   onCommit,
 }: {
   def: PropertyDef;
   value: PropertyValue | undefined;
   allNotes: Note[];
-  currentNoteId: string;
+  currentNote: Note;
+  schemas: PropertySchemas;
   onOpenNote: (id: string) => void;
   onCommit: (value: PropertyValue | null) => void;
 }) {
@@ -297,7 +313,7 @@ function RelationValueEditor({
       : allNotes.filter((note) => !isExternalNote(note) && !isTrashed(note))
   ).filter(
     (note) =>
-      note.id !== currentNoteId &&
+      note.id !== currentNote.id &&
       !selectedLower.has(noteTitle(note).toLowerCase()),
   );
 
@@ -317,15 +333,21 @@ function RelationValueEditor({
 
   return (
     <div className="flex flex-wrap items-center gap-1 px-0.5 py-0.5">
-      {titles.map((title) => (
-        <RelationChip
-          key={title}
-          title={title}
-          note={findNoteByTitle(title, allNotes)}
-          onOpenNote={onOpenNote}
-          onRemove={() => remove(title)}
-        />
-      ))}
+      {titles.map((title) => {
+        const linkedNote = findNoteByTitle(title, allNotes);
+        return (
+          <RelationChip
+            key={title}
+            title={title}
+            note={linkedNote}
+            reciprocal={
+              linkedNote ? hasRelationTo(linkedNote, currentNote, schemas) : false
+            }
+            onOpenNote={onOpenNote}
+            onRemove={() => remove(title)}
+          />
+        );
+      })}
       {showAdd && (
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
@@ -374,7 +396,8 @@ function ValueEditor({
   def,
   value,
   allNotes,
-  currentNoteId,
+  currentNote,
+  schemas,
   onOpenNote,
   onCommit,
 }: ValueEditorProps) {
@@ -385,7 +408,8 @@ function ValueEditor({
         def={def}
         value={value}
         allNotes={allNotes}
-        currentNoteId={currentNoteId}
+        currentNote={currentNote}
+        schemas={schemas}
         onOpenNote={onOpenNote}
         onCommit={onCommit}
       />
@@ -760,7 +784,8 @@ export function PropertiesSection({
                   def={def}
                   value={valueFor(def.name)}
                   allNotes={allNotes}
-                  currentNoteId={note.id}
+                  currentNote={note}
+                  schemas={schemas}
                   onOpenNote={onOpenNote}
                   onCommit={(value) =>
                     setNoteProperty(note.id, def.name, value)
@@ -838,7 +863,8 @@ export function PropertiesSection({
                   def={{ name: key, type: inferredType }}
                   value={value}
                   allNotes={allNotes}
-                  currentNoteId={note.id}
+                  currentNote={note}
+                  schemas={schemas}
                   onOpenNote={onOpenNote}
                   onCommit={(next) => setNoteProperty(note.id, key, next)}
                 />

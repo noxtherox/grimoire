@@ -24,6 +24,11 @@ export interface GrimoireTheme {
   sidebarFg: string;
 }
 
+export interface SavedTheme {
+  name: string;
+  theme: GrimoireTheme;
+}
+
 export const DEFAULT_THEME: GrimoireTheme = {
   accent: "#d84b40",
   link: "#0b6acd",
@@ -173,6 +178,8 @@ export const THEME_PRESETS: { name: string; theme: GrimoireTheme }[] = [
 ];
 
 const STORAGE_KEY = "grimoire-theme";
+const SAVED_THEMES_STORAGE_KEY = "grimoire-saved-themes";
+export const MAX_SAVED_THEME_NAME_LENGTH = 40;
 
 const CSS_VARS: Record<keyof GrimoireTheme, string> = {
   accent: "--grim-accent",
@@ -280,6 +287,87 @@ export function loadTheme(): GrimoireTheme {
   } catch {
     return { ...DEFAULT_THEME };
   }
+}
+
+function parseCompleteTheme(value: unknown): GrimoireTheme | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<GrimoireTheme>;
+  const theme = { ...DEFAULT_THEME };
+  for (const key of Object.keys(CSS_VARS) as (keyof GrimoireTheme)[]) {
+    const color = candidate[key];
+    if (typeof color !== "string" || !isValidHex(color)) return null;
+    theme[key] = color.trim();
+  }
+  return theme;
+}
+
+export function loadSavedThemes(): SavedTheme[] {
+  try {
+    const raw = localStorage.getItem(SAVED_THEMES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    const names = new Set<string>();
+    const saved: SavedTheme[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const name =
+        typeof item.name === "string"
+          ? item.name.trim().slice(0, MAX_SAVED_THEME_NAME_LENGTH)
+          : "";
+      const theme = parseCompleteTheme(item.theme);
+      const normalizedName = name.toLocaleLowerCase();
+      if (!name || !theme || names.has(normalizedName)) continue;
+      names.add(normalizedName);
+      saved.push({ name, theme });
+    }
+    return saved;
+  } catch {
+    return [];
+  }
+}
+
+/** Save a named theme, replacing the existing saved theme with the same name. */
+export function saveNamedTheme(
+  name: string,
+  theme: GrimoireTheme,
+): SavedTheme[] {
+  const cleanName = name.trim().slice(0, MAX_SAVED_THEME_NAME_LENGTH);
+  if (!cleanName) return loadSavedThemes();
+
+  const saved = loadSavedThemes();
+  const match = saved.findIndex(
+    (candidate) =>
+      candidate.name.toLocaleLowerCase() === cleanName.toLocaleLowerCase(),
+  );
+  const nextTheme = { name: cleanName, theme: { ...theme } };
+  const next =
+    match === -1
+      ? [...saved, nextTheme]
+      : saved.map((candidate, index) =>
+          index === match ? nextTheme : candidate,
+        );
+
+  try {
+    localStorage.setItem(SAVED_THEMES_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Persistence is best-effort; keep the in-memory result available to the UI.
+  }
+  return next;
+}
+
+export function deleteSavedTheme(name: string): SavedTheme[] {
+  const normalizedName = name.trim().toLocaleLowerCase();
+  const next = loadSavedThemes().filter(
+    (candidate) => candidate.name.toLocaleLowerCase() !== normalizedName,
+  );
+  try {
+    localStorage.setItem(SAVED_THEMES_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Persistence is best-effort.
+  }
+  return next;
 }
 
 export function saveTheme(theme: GrimoireTheme): void {

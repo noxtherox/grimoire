@@ -632,7 +632,7 @@ export function EditorPane({
         </DialogContent>
       </Dialog>
       <Dialog open={conflictReviewOpen} onOpenChange={setConflictReviewOpen}>
-        <DialogContent className="max-h-[85vh] max-w-6xl overflow-hidden">
+        <DialogContent className="h-[85vh] max-w-6xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
           <DialogHeader>
             <DialogTitle>Review note changes</DialogTitle>
           </DialogHeader>
@@ -642,7 +642,7 @@ export function EditorPane({
                 <div className="border-b bg-muted/50 px-3 py-2 text-xs font-semibold">
                   Current note in Grimoire
                 </div>
-                <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-3 text-xs">
+                <pre className="min-h-0 flex-1 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words p-3 text-xs">
                   {conflict.currentContent}
                 </pre>
               </div>
@@ -650,7 +650,7 @@ export function EditorPane({
                 <div className="border-b bg-muted/50 px-3 py-2 text-xs font-semibold">
                   Changed version on disk
                 </div>
-                <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-3 text-xs">
+                <pre className="min-h-0 flex-1 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words p-3 text-xs">
                   {conflict.diskContent ?? "This file was deleted on disk."}
                 </pre>
               </div>

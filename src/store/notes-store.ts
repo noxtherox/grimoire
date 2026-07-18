@@ -530,6 +530,40 @@ function installDesktopFileSync() {
   desktopSyncTimer = setInterval(() => void synchronizeDesktopFiles(), 1_000);
 }
 
+interface DesktopSyncBasisEntry {
+  id: string;
+  path: string;
+  externalPath: string | undefined;
+  content: string;
+  diskSnapshot: string | undefined;
+}
+
+function captureDesktopSyncBasis(): DesktopSyncBasisEntry[] {
+  return state.notes.map((note) => ({
+    id: note.id,
+    path: note.path,
+    externalPath: note.externalPath,
+    content: note.content,
+    diskSnapshot: diskSnapshots.get(note.id),
+  }));
+}
+
+function desktopSyncBasisIsCurrent(basis: DesktopSyncBasisEntry[]): boolean {
+  return (
+    basis.length === state.notes.length &&
+    basis.every((entry, index) => {
+      const note = state.notes[index];
+      return (
+        note?.id === entry.id &&
+        note.path === entry.path &&
+        note.externalPath === entry.externalPath &&
+        note.content === entry.content &&
+        diskSnapshots.get(note.id) === entry.diskSnapshot
+      );
+    })
+  );
+}
+
 export async function synchronizeDesktopFiles() {
   if (
     desktopSyncInFlight ||
@@ -540,6 +574,7 @@ export async function synchronizeDesktopFiles() {
   }
   desktopSyncInFlight = true;
   const activeBackend = backend;
+  const syncBasis = captureDesktopSyncBasis();
   try {
     const externalNotes = state.notes.filter(isExternalNote);
     const [files, dirs, externalFiles, fileLocations] = await Promise.all([
@@ -565,6 +600,11 @@ export async function synchronizeDesktopFiles() {
       loadFileLocations(activeBackend),
     ]);
     if (backend !== activeBackend || state.status !== "ready") return;
+    // The filesystem scan is asynchronous. If Grimoire edited, saved, renamed,
+    // added, or removed a note while it was in progress, its results may describe
+    // the disk from before Grimoire's own write. Ignore that stale scan and let
+    // the next poll compare against the new snapshot.
+    if (!desktopSyncBasisIsCurrent(syncBasis)) return;
 
     const latestNotes = [...state.notes];
     const nextConflicts = { ...state.conflicts };
