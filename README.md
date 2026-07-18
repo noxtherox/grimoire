@@ -1,31 +1,107 @@
-# Grimoire 📖
+<p align="center">
+  <img src="public/grimoire-logo.svg" alt="Grimoire logo" width="96" />
+</p>
 
-A Bear-style notes app where your notes are **plain markdown files in folders**, and the folders are your **types**: every note has a type, and optionally a sub-type and sub-sub-type (up to 3 levels). Notes link to each other with `[[wikilinks]]`, and the backlinks section of a note groups the notes that link to it by *their* type — so you can see at a glance where a note is referenced from.
+<h1 align="center">Grimoire</h1>
 
-Because the vault is just a folder of `.md` files, you can point Grimoire at any existing folder and the notes show up with their types derived from the folder structure. Your notes stay portable and yours.
+<p align="center">
+  A local-first Markdown notes app built around folders, links, and files you own.
+</p>
 
-## Features
+Grimoire turns an ordinary folder of Markdown files into a structured knowledge
+base. Folders become note types, `[[wikilinks]]` connect ideas, and YAML
+frontmatter adds queryable properties without locking your writing into a
+proprietary database.
 
-- **Vault = folder**: pick any folder; `type/sub-type/sub-sub-type/Note.md` maps to the type tree in the sidebar
-- **External Notes**: open multiple markdown files from anywhere on your computer without assigning a type; close them without deleting them, inspect/reveal their paths, or move them into the vault and choose a type
-- Three-pane Bear-style layout: type tree sidebar, note list, markdown editor
-- CodeMirror markdown editor with live syntax styling and inline `#tag` highlighting
-- `[[` autocompletes note titles; ⌘/Ctrl+Click a link to follow it (links to missing notes create them)
-- Backlinks panel grouped by the linking notes' types
-- Renaming a note's first line renames its file; changing its type moves the file
-- Trash is a `.trash/` folder inside the vault — restore puts files back where they were
-- Pin, search, ⌘N for a new note, reload-from-disk button in the sidebar
-- Runs in the browser too (Dyad preview) with a virtual vault in localStorage
+The desktop app reads and writes your files directly. You can keep using the
+same vault with a text editor, Git, sync software, or any other Markdown tool.
 
-## Run
+## Highlights
+
+- **Plain files, real folders** — choose any folder as a vault. A path such as
+  `Projects/Active/Grimoire.md` appears as a nested type in the sidebar.
+- **Focused Markdown editing** — CodeMirror live preview supports headings,
+  lists, tables, links, tags, pasted images, and keyboard-friendly formatting.
+- **Connected notes** — autocomplete `[[wikilinks]]`, follow links from the
+  editor, create missing notes, and inspect backlinks grouped by note type.
+- **Structured properties** — define text, number, date, checkbox, list, and
+  note-relation fields. Values remain readable YAML frontmatter.
+- **Fast organization** — search and filter by type, date, and properties;
+  reorder types; pin or archive notes; and use a recoverable vault-local trash.
+- **Work with files outside the vault** — open standalone Markdown notes without
+  importing them, or associate notes with PDFs and common office documents.
+- **Desktop workflow tools** — reveal notes in the system file manager, open
+  links in the browser, use focus mode, and run an embedded terminal in the
+  selected note's folder.
+- **Personalized workspace** — resize or collapse panels and choose from built-in
+  light and dark themes with a theme-aware Grimoire mark.
+
+## How the vault works
+
+```text
+My Vault/
+├── Projects/
+│   ├── Active/
+│   │   └── Grimoire.md
+│   └── Project Index.md
+├── People/
+│   └── Ada.md
+├── assets/                 # pasted and dropped images
+├── .grimoire/              # Grimoire's vault metadata
+└── .trash/                 # recoverable deleted notes
+```
+
+Each `.md` file is a note. Grimoire derives its type from its containing folders,
+up to three levels deep. Moving a note to another type moves the file; changing
+the title line renames it. Property values stay in the note's frontmatter, while
+vault-wide property definitions and display metadata live under `.grimoire/`.
+
+## Getting started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/)
+- [Rust](https://www.rust-lang.org/tools/install) and the
+  [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for desktop
+  development
+
+### Install and run
 
 ```sh
 pnpm install
 
-# Web (Dyad preview — virtual vault)
+# Browser development mode (uses a virtual vault in localStorage)
 pnpm dev
 
-# Desktop (Tauri v2 — requires Rust; real .md files)
-pnpm desktop:dev     # dev window
-pnpm desktop:build   # installable bundles for the current OS
+# Desktop development mode (uses the real filesystem)
+pnpm desktop:dev
 ```
+
+Vite serves the browser app at `http://localhost:8080` by default. On first
+desktop launch, choose the folder you want Grimoire to use as its vault.
+
+## Development
+
+```sh
+pnpm test            # run the Vitest suite
+pnpm build           # build the web app
+pnpm desktop:build   # build installable desktop bundles for the current OS
+```
+
+The project is built with React, TypeScript, CodeMirror 6, Tailwind CSS,
+shadcn/ui, and Tauri 2. The native Rust layer provides filesystem integration,
+desktop file opening, and the embedded PTY terminal.
+
+```text
+src/                  React application and browser vault
+src/components/       editor, notes, terminal, and shared UI
+src/lib/              Markdown, filtering, properties, links, and vault helpers
+src/store/            note and vault state
+src-tauri/            Rust desktop shell, permissions, and packaging
+```
+
+## Project status
+
+Grimoire is under active development. The browser build is useful for previewing
+the interface, but its vault is stored in browser local storage; use the desktop
+app when you want Grimoire to work directly with files on disk.
