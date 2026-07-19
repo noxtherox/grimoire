@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import {
+  Bot,
+  CheckCircle2,
   FolderCog,
   FolderOpen,
   MapPin,
@@ -7,7 +9,9 @@ import {
   RotateCcw,
   Save,
   Trash2,
+  TerminalSquare,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +22,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -64,6 +74,7 @@ import {
   fileLocationUsages,
   getFileLocationMappings,
   mapFileLocation,
+  refreshVaultFromDisk,
   removeFileLocation,
   renameFileLocation,
   useVault,
@@ -107,6 +118,23 @@ interface ThemeSettingsDialogProps {
   onHideSubtypeNotesChange: (hidden: boolean) => void;
 }
 
+interface CliStatus {
+  installed: boolean;
+  executablePath: string;
+  onPath: boolean;
+  version: string;
+}
+
+interface MigrationPreview {
+  notesScanned: number;
+  notesChanged: number;
+  idsAdded: number;
+  pinnedAdded: number;
+  archivedAdded: number;
+  blocked: boolean;
+  warnings: string[];
+}
+
 export function ThemeSettingsDialog({
   open,
   onOpenChange,
@@ -125,7 +153,12 @@ export function ThemeSettingsDialog({
   const [noteAlignment, setNoteAlignment] =
     useState<NoteAlignment>(loadNoteAlignment);
   const [locationDraft, setLocationDraft] = useState("");
-  const { fileLocations, isDesktop } = useVault();
+  const [cliStatus, setCliStatus] = useState<CliStatus | null>(null);
+  const [migrationPreview, setMigrationPreview] =
+    useState<MigrationPreview | null>(null);
+  const [cliBusy, setCliBusy] = useState(false);
+  const [cliMessage, setCliMessage] = useState("");
+  const { fileLocations, isDesktop, location, notes } = useVault();
   const locationMappings = getFileLocationMappings();
 
   useEffect(() => {
@@ -135,8 +168,20 @@ export function ThemeSettingsDialog({
       setInterfaceZoom(loadInterfaceZoom());
       setNoteWidth(loadNoteWidth());
       setNoteAlignment(loadNoteAlignment());
+      if (isDesktop) {
+        void invoke<CliStatus>("cli_status").then(setCliStatus);
+        if (location) {
+          const pinnedPaths = notes.filter((note) => note.pinned).map((note) => note.path);
+          const archivedPaths = notes.filter((note) => note.archived).map((note) => note.path);
+          void invoke<MigrationPreview>("cli_migration_preview", {
+            vaultPath: location,
+            pinnedPaths,
+            archivedPaths,
+          }).then(setMigrationPreview);
+        }
+      }
     }
-  }, [open]);
+  }, [isDesktop, location, notes, open]);
 
   // Changes apply immediately so you can preview them behind the dialog
   const update = (patch: Partial<GrimoireTheme>) => {
@@ -174,17 +219,142 @@ export function ThemeSettingsDialog({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Choose how notes are displayed, created, and connected to files.
-            File-location names sync with the vault; local folder mappings do not.
+            Choose how Grimoire looks, behaves, and connects to your files.
           </DialogDescription>
         </DialogHeader>
-        <div>
-          {isDesktop && (
-            <>
+        <Tabs defaultValue="general" className="min-w-0">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="appearance">Appearance</TabsTrigger>
+            <TabsTrigger value="sync">Sync</TabsTrigger>
+            <TabsTrigger value="cli">CLI</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="cli" className="mt-4 space-y-4">
+            {isDesktop ? (
+              <>
+                <div className="rounded-lg border border-border p-4">
+                  <div className="flex items-start gap-3">
+                    <TerminalSquare className="mt-0.5 shrink-0 text-muted-foreground" size={18} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">Grimoire command line</p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        Installing the CLI will enable your AI agents to interact directly with the commands for Grimoire, which makes it clearer for the agent to work. For that, we will need to introduce some hidden properties in your notes which will not affect how you use the desktop application. Here&apos;s a preview.
+                      </p>
+                      <div className="mt-3 rounded-md bg-muted/60 p-3 text-xs">
+                        {migrationPreview ? (
+                          <>
+                            <p>{migrationPreview.notesChanged} of {migrationPreview.notesScanned} notes will be updated.</p>
+                            <p className="mt-1 text-muted-foreground">
+                              {migrationPreview.idsAdded} note IDs, {migrationPreview.pinnedAdded} pinned statuses, and {migrationPreview.archivedAdded} archived statuses will be added as hidden data.
+                            </p>
+                            {migrationPreview.blocked && (
+                              <p className="mt-2 text-destructive">Some notes need review before migration: {migrationPreview.warnings.join(" · ")}</p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-muted-foreground">Preparing migration preview…</p>
+                        )}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          disabled={cliBusy || migrationPreview?.blocked}
+                          onClick={async () => {
+                            if (!location) return;
+                            setCliBusy(true);
+                            setCliMessage("");
+                            try {
+                              const pinnedPaths = notes.filter((note) => note.pinned).map((note) => note.path);
+                              const archivedPaths = notes.filter((note) => note.archived).map((note) => note.path);
+                              const preview = await invoke<MigrationPreview>("cli_migration_apply", { vaultPath: location, pinnedPaths, archivedPaths });
+                              setMigrationPreview(preview);
+                              await refreshVaultFromDisk();
+                              setCliMessage(`Prepared ${preview.notesChanged} notes for CLI access.`);
+                            } catch (error) {
+                              setCliMessage(String(error));
+                            } finally {
+                              setCliBusy(false);
+                            }
+                          }}
+                        >
+                          Prepare notes
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={cliBusy}
+                          onClick={async () => {
+                            setCliBusy(true);
+                            setCliMessage("");
+                            try {
+                              const status = await invoke<CliStatus>("cli_install");
+                              setCliStatus(status);
+                              setCliMessage(`CLI installed at ${status.executablePath}`);
+                            } catch (error) {
+                              setCliMessage(String(error));
+                            } finally {
+                              setCliBusy(false);
+                            }
+                          }}
+                        >
+                          {cliStatus?.installed ? "Reinstall CLI" : "Install CLI"}
+                        </Button>
+                      </div>
+                      {cliStatus?.installed && (
+                        <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                          <CheckCircle2 size={13} className="text-green-600" /> Installed at {cliStatus.executablePath}{!cliStatus.onPath && " · Add its folder to PATH to use grimoire anywhere."}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border p-4">
+                  <div className="flex items-start gap-3">
+                    <Bot className="mt-0.5 shrink-0 text-muted-foreground" size={18} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">AI agent skills</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Install instructions that teach an agent to use Grimoire safely and consistently.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {["Codex", "Claude", "Agent Skills", "Hermes"].map((agent) => (
+                          <Button
+                            key={agent}
+                            size="sm"
+                            variant="outline"
+                            disabled={cliBusy}
+                            onClick={async () => {
+                              setCliBusy(true);
+                              try {
+                                const path = await invoke<string>("cli_install_skill", { agent: agent.toLowerCase().replace(" ", "-"), profile: null });
+                                setCliMessage(`${agent} skill installed at ${path}`);
+                              } catch (error) {
+                                setCliMessage(String(error));
+                              } finally {
+                                setCliBusy(false);
+                              }
+                            }}
+                          >
+                            Install for {agent}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {cliMessage && <p className="text-xs text-muted-foreground" role="status">{cliMessage}</p>}
+              </>
+            ) : (
+              <div className="rounded-lg border border-border p-3 text-sm">CLI installation is available in the desktop app.</div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="sync" className="mt-4">
+            {isDesktop ? (
+              <div>
               <p className="pb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 File locations
               </p>
-              <div className="mb-5 space-y-2 rounded-lg border border-border p-3">
+              <div className="space-y-2 rounded-lg border border-border p-3">
                 <p className="text-xs text-muted-foreground">
                   Names sync with the vault. Each device maps the name to its
                   own local cloud-folder root.
@@ -255,8 +425,18 @@ export function ThemeSettingsDialog({
                   </Button>
                 </div>
               </div>
-            </>
-          )}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-sm font-medium">File locations</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Local folder mappings are available in the desktop app.
+                </p>
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="general" className="mt-4">
           <p className="pb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Note list
           </p>
@@ -317,6 +497,9 @@ export function ThemeSettingsDialog({
               </SelectContent>
             </Select>
           </div>
+          </TabsContent>
+
+          <TabsContent value="appearance" className="mt-4">
           <p className="pb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Appearance
           </p>
@@ -568,7 +751,8 @@ export function ThemeSettingsDialog({
               <RotateCcw size={13} /> Reset to defaults
             </Button>
           </div>
-        </div>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

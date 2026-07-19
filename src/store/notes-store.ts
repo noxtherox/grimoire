@@ -38,6 +38,11 @@ import {
   withBody,
 } from "@/lib/frontmatter";
 import {
+  isReservedGrimoireProperty,
+  readGrimoireMetadata,
+  setGrimoireState,
+} from "@/lib/grimoire-metadata";
+import {
   type PropertyDef,
   type PropertySchemas,
   hoistSchemasToTopLevel,
@@ -432,14 +437,17 @@ async function loadVault(nextBackend: VaultBackend) {
     ]);
     const pinned = loadPinnedPaths();
     const archived = loadArchivedPaths();
-    const vaultNotes: Note[] = files.map((file) => ({
-      id: crypto.randomUUID(),
-      path: file.path,
-      content: file.content,
-      pinned: pinned.has(file.path),
-      archived: archived.has(file.path),
-      updatedAt: file.updatedAt,
-    }));
+    const vaultNotes: Note[] = files.map((file) => {
+      const metadata = readGrimoireMetadata(file.content);
+      return {
+        id: metadata.id ?? crypto.randomUUID(),
+        path: file.path,
+        content: file.content,
+        pinned: metadata.pinned || pinned.has(file.path),
+        archived: metadata.archived || archived.has(file.path),
+        updatedAt: file.updatedAt,
+      };
+    });
     let externalNotes =
       nextBackend.kind === "desktop" ? await loadExternalNotes() : [];
     if (externalNotes.length) {
@@ -519,6 +527,33 @@ export async function reloadVault() {
   if (!backend) return;
   if (!(await flushAll())) return;
   await loadVault(backend);
+}
+
+/** Reconciles changes made by the CLI when the desktop app regains focus. */
+export async function refreshVaultFromDisk() {
+  if (!backend || backend.kind !== "desktop" || state.status !== "ready") return;
+  await flushAll();
+  const files = await backend.loadAll();
+  const existingByPath = new Map(
+    state.notes.filter((note) => !isExternalNote(note)).map((note) => [note.path, note]),
+  );
+  const external = state.notes.filter(isExternalNote);
+  const refreshed = files.map((file) => {
+    const previous = existingByPath.get(file.path);
+    const metadata = readGrimoireMetadata(file.content);
+    const note: Note = {
+      id: metadata.id ?? previous?.id ?? crypto.randomUUID(),
+      path: file.path,
+      content: file.content,
+      pinned: metadata.pinned,
+      archived: metadata.archived,
+      updatedAt: file.updatedAt,
+    };
+    diskSnapshots.set(note.id, file.content);
+    return note;
+  });
+  const next = [...refreshed, ...external];
+  if (JSON.stringify(next) !== JSON.stringify(state.notes)) setState({ notes: next });
 }
 
 function relativePathKey(path: string): string {
@@ -1734,6 +1769,7 @@ function schemaOwnerKey(typeKeyOrPath: string): string {
 }
 
 export function addTypeProperty(typeKeyOrPath: string, def: PropertyDef) {
+  if (isReservedGrimoireProperty(def.name)) return;
   const ownerKey = schemaOwnerKey(typeKeyOrPath);
   const defs = state.schemas[ownerKey] ?? [];
   if (defs.some((d) => d.name.toLowerCase() === def.name.toLowerCase())) return;
@@ -1746,6 +1782,7 @@ export function updateTypeProperty(
   oldName: string,
   def: PropertyDef,
 ) {
+  if (isReservedGrimoireProperty(def.name)) return;
   const ownerKey = schemaOwnerKey(typeKeyOrPath);
   const defs = state.schemas[ownerKey] ?? [];
   const idx = defs.findIndex(
@@ -1805,6 +1842,7 @@ export function setNoteProperty(
   name: string,
   value: PropertyValue | null,
 ) {
+  if (isReservedGrimoireProperty(name)) return;
   const note = state.notes.find((candidate) => candidate.id === id);
   if (!note) return;
   const next = setContentProperty(note.content, name, value);
@@ -2134,7 +2172,9 @@ export async function setNoteType(id: string, typePath: string[]) {
 export function toggleNotePinned(id: string) {
   const note = state.notes.find((candidate) => candidate.id === id);
   if (!note || isExternalNote(note)) return;
-  updateNote(id, { pinned: !note.pinned });
+  const pinned = !note.pinned;
+  updateNoteContent(id, setGrimoireState(note.content, { pinned }));
+  updateNote(id, { pinned });
   savePinnedPaths();
 }
 
@@ -2142,7 +2182,12 @@ export function toggleNoteArchived(id: string) {
   const note = state.notes.find((candidate) => candidate.id === id);
   if (!note || isExternalNote(note) || isTrashed(note)) return;
   const archived = !note.archived;
-  updateNote(id, { archived, pinned: archived ? false : note.pinned });
+  const pinned = archived ? false : note.pinned;
+  updateNoteContent(
+    id,
+    setGrimoireState(note.content, { archived, pinned }),
+  );
+  updateNote(id, { archived, pinned });
   saveNoteDisplayState();
 }
 

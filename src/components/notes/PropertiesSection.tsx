@@ -62,6 +62,7 @@ import {
 } from "@/store/notes-store";
 import { cn } from "@/lib/utils";
 import { FILE_HUB_PROPERTY_KEYS } from "@/lib/file-hubs";
+import { isReservedGrimoireProperty } from "@/lib/grimoire-metadata";
 import { hasRelationTo } from "@/lib/links";
 
 const TYPE_ICONS: Record<PropertyType, typeof TypeIcon> = {
@@ -566,7 +567,9 @@ function DefForm({
   );
   const clean = sanitizePropertyName(name);
   const canSubmit = Boolean(
-    clean && (type !== "list" || listOptions.length > 0),
+    clean &&
+      !isReservedGrimoireProperty(clean) &&
+      (type !== "list" || listOptions.length > 0),
   );
 
   return (
@@ -704,7 +707,9 @@ export function PropertiesSection({
   // definitions live on the top-level type and cascade to every sub-type
   const topKey = schemaKeyFor(typePath);
   const topLabel = topKey || "unfiled";
-  const effective = effectiveProperties(typePath, schemas);
+  const effective = effectiveProperties(typePath, schemas).filter(
+    (def) => !isReservedGrimoireProperty(def.name),
+  );
   const values = getNoteProperties(note.content);
   const existingTypePaths = getAllTypePaths(allNotes, extraTypes);
 
@@ -713,7 +718,8 @@ export function PropertiesSection({
   const extras = Object.entries(values).filter(
     ([key]) =>
       !covered.has(key.toLowerCase()) &&
-      !FILE_HUB_PROPERTY_KEYS.has(key.toLowerCase()),
+      !FILE_HUB_PROPERTY_KEYS.has(key.toLowerCase()) &&
+      !isReservedGrimoireProperty(key),
   );
 
   const valueFor = (name: string): PropertyValue | undefined => {

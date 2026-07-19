@@ -8,6 +8,286 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use serde::Serialize;
 use tauri::{Emitter, Manager};
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliInstallStatus {
+    installed: bool,
+    executable_path: String,
+    on_path: bool,
+    version: String,
+}
+
+fn cli_target_path() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Could not locate your home folder".to_string())?;
+    #[cfg(target_os = "windows")]
+    let path = home.join("AppData/Local/Grimoire/bin/grimoire.exe");
+    #[cfg(not(target_os = "windows"))]
+    let path = home.join(".local/bin/grimoire");
+    Ok(path)
+}
+
+fn path_contains_file(path: &Path) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|directory| {
+                directory
+                    .join(path.file_name().unwrap_or_default())
+                    .exists()
+            })
+        })
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn cli_status() -> Result<CliInstallStatus, String> {
+    let path = cli_target_path()?;
+    Ok(CliInstallStatus {
+        installed: path.is_file(),
+        on_path: path_contains_file(&path),
+        executable_path: path.to_string_lossy().into_owned(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
+#[tauri::command]
+fn cli_install(app: tauri::AppHandle) -> Result<CliInstallStatus, String> {
+    let target = cli_target_path()?;
+    let file_name = if cfg!(target_os = "windows") {
+        "grimoire.exe"
+    } else {
+        "grimoire"
+    };
+    let candidates = [
+        app.path()
+            .resource_dir()
+            .ok()
+            .map(|path| path.join("binaries").join(file_name)),
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|parent| parent.join(file_name))),
+        Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("target/release")
+                .join(file_name),
+        ),
+        Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("target/debug")
+                .join(file_name),
+        ),
+    ];
+    let source = candidates
+        .into_iter()
+        .flatten()
+        .find(|path| path.is_file())
+        .ok_or_else(|| "The CLI executable was not included in this build".to_string())?;
+    fs::create_dir_all(target.parent().unwrap()).map_err(|error| error.to_string())?;
+    fs::copy(source, &target).map_err(|error| format!("Could not install the CLI: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+            .map_err(|error| error.to_string())?;
+    }
+    cli_status()
+}
+
+fn skill_markdown(agent: &str) -> String {
+    format!(
+        r#"---
+name: grimoire
+description: Work safely with the user's local Grimoire Markdown vault through the Grimoire CLI.
+---
+
+# Grimoire CLI
+
+Use `grimoire` for Grimoire vault notes. Always select the vault explicitly with `--vault` in automation and use `--json` for machine-readable output.
+
+Start with `grimoire vault list --json` and `grimoire doctor --json`. Read with `note list`, `note get`, and `search`. Mutate with `note create`, `note set-body`, `note append`, `note pin`, `note archive`, `note property set`, `note trash`, `note restore`, and `import`. Include `--if-revision` when changing content read earlier. Preview `migrate` before applying it. Use `history` and `undo` for recovery. Never edit `grimoire-*` properties directly.
+
+For destructive or bulk operations, explain the preview and obtain explicit user approval. This package targets {agent}.
+"#
+    )
+}
+
+#[tauri::command]
+fn cli_install_skill(agent: String, profile: Option<String>) -> Result<String, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Could not locate your home folder".to_string())?;
+    let normalized = agent.to_ascii_lowercase();
+    let directory = match normalized.as_str() {
+        "codex" | "agent-skills" => home.join(".agents/skills/grimoire"),
+        "claude" => home.join(".claude/skills/grimoire"),
+        "hermes" => profile
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                home.join(".hermes/profiles")
+                    .join(value)
+                    .join("skills/note-taking/grimoire")
+            })
+            .unwrap_or_else(|| home.join(".hermes/skills/note-taking/grimoire")),
+        _ => {
+            return Err("Supported agents are Codex, Claude, Agent Skills, and Hermes".to_string())
+        }
+    };
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    fs::write(directory.join("SKILL.md"), skill_markdown(&normalized))
+        .map_err(|error| error.to_string())?;
+    Ok(directory.to_string_lossy().into_owned())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliMigrationPreview {
+    notes_scanned: usize,
+    notes_changed: usize,
+    ids_added: usize,
+    pinned_added: usize,
+    archived_added: usize,
+    blocked: bool,
+    warnings: Vec<String>,
+}
+
+fn migration_plan(
+    root: &Path,
+    pinned_paths: &[String],
+    archived_paths: &[String],
+) -> Result<grimoire_core::VaultMetadataMigrationPlan, String> {
+    let notes = grimoire_core::scan_vault(root).map_err(|error| error.to_string())?;
+    let inputs: Vec<_> = notes
+        .iter()
+        .map(|note| grimoire_core::MigrationNoteInput {
+            path: &note.path,
+            content: &note.content,
+            legacy_pinned: pinned_paths.iter().any(|path| path == &note.path),
+            legacy_archived: archived_paths.iter().any(|path| path == &note.path),
+        })
+        .collect();
+    Ok(grimoire_core::plan_vault_metadata_migration(&inputs))
+}
+
+#[tauri::command]
+fn cli_migration_preview(
+    vault_path: String,
+    pinned_paths: Vec<String>,
+    archived_paths: Vec<String>,
+) -> Result<CliMigrationPreview, String> {
+    let root = Path::new(&vault_path);
+    let plan = migration_plan(root, &pinned_paths, &archived_paths)?;
+    Ok(CliMigrationPreview {
+        notes_scanned: plan.summary.notes_scanned,
+        notes_changed: plan.summary.notes_changed,
+        ids_added: plan.summary.ids_added,
+        pinned_added: plan.summary.pinned_added,
+        archived_added: plan.summary.archived_added,
+        blocked: !plan.can_apply,
+        warnings: plan
+            .issues
+            .iter()
+            .map(|issue| format!("{}: {}", issue.path, issue.message))
+            .collect(),
+    })
+}
+
+#[tauri::command]
+fn cli_migration_apply(
+    vault_path: String,
+    pinned_paths: Vec<String>,
+    archived_paths: Vec<String>,
+) -> Result<CliMigrationPreview, String> {
+    let root = Path::new(&vault_path);
+    let plan = migration_plan(root, &pinned_paths, &archived_paths)?;
+    if !plan.can_apply {
+        return Err("Migration is blocked by note metadata that needs review".to_string());
+    }
+    let mut written: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for note in &plan.notes {
+        if !note.plan.changed {
+            continue;
+        }
+        let path = root.join(&note.path);
+        let original = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        match grimoire_core::atomic_write(
+            &path,
+            &note.plan.next_content,
+            Some(&note.plan.before_revision),
+        ) {
+            Ok(_) => written.push((path, original)),
+            Err(error) => {
+                for (written_path, original) in written {
+                    let _ = grimoire_core::atomic_write(&written_path, &original, None);
+                }
+                return Err(format!("Migration was rolled back: {error}"));
+            }
+        }
+    }
+    let history_dir = root.join(".grimoire/history");
+    fs::create_dir_all(&history_dir).map_err(|error| error.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    for (index, (path, original)) in written.iter().enumerate() {
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let transaction_id = format!("desktop-{now}-{index}");
+        let after = fs::read_to_string(path).map_err(|error| error.to_string())?;
+        let record = serde_json::json!({
+            "transactionId": transaction_id,
+            "operation": "migration.metadata",
+            "pathBefore": relative,
+            "pathAfter": relative,
+            "contentBefore": original,
+            "contentAfter": after,
+            "createdAtMs": now,
+        });
+        fs::write(
+            history_dir.join(format!("{transaction_id}.json")),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let mut manifest =
+        grimoire_core::load_or_create_manifest(root).map_err(|error| error.to_string())?;
+    manifest.metadata_version = 1;
+    manifest.ids_required = true;
+    grimoire_core::write_vault_manifest(root, &manifest).map_err(|error| error.to_string())?;
+    let registry_path =
+        grimoire_core::default_registry_path().map_err(|error| error.to_string())?;
+    let mut registry =
+        grimoire_core::load_registry(&registry_path).map_err(|error| error.to_string())?;
+    registry
+        .vaults
+        .retain(|vault| vault.id != manifest.vault_id);
+    registry.vaults.push(grimoire_core::VaultRecord {
+        id: manifest.vault_id,
+        name: root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Vault")
+            .to_string(),
+        path: root.canonicalize().map_err(|error| error.to_string())?,
+    });
+    registry
+        .vaults
+        .sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    if registry.default_vault_id.is_none() {
+        registry.default_vault_id = Some(manifest.vault_id);
+    }
+    grimoire_core::save_registry(&registry_path, &registry).map_err(|error| error.to_string())?;
+    Ok(CliMigrationPreview {
+        notes_scanned: plan.summary.notes_scanned,
+        notes_changed: plan.summary.notes_changed,
+        ids_added: plan.summary.ids_added,
+        pinned_added: plan.summary.pinned_added,
+        archived_added: plan.summary.archived_added,
+        blocked: false,
+        warnings: Vec::new(),
+    })
+}
+
 #[derive(Default)]
 struct PendingOpenFiles(Mutex<Vec<String>>);
 
@@ -472,7 +752,12 @@ pub fn run() {
             terminal_start,
             terminal_write,
             terminal_resize,
-            terminal_stop
+            terminal_stop,
+            cli_status,
+            cli_install,
+            cli_install_skill,
+            cli_migration_preview,
+            cli_migration_apply
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

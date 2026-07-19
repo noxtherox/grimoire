@@ -24,6 +24,7 @@ import {
   moveExternalNoteToVault,
   onDesktopNotesOpened,
   openExternalNotes,
+  refreshVaultFromDisk,
   useVault,
 } from "@/store/notes-store";
 import {
@@ -86,6 +87,16 @@ const Index = () => {
     return stopListening;
   }, []);
 
+  useEffect(() => {
+    const refresh = () => void refreshVaultFromDisk();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+
   const { notes } = vault;
   const effectiveFilter = useMemo<NoteFilter>(
     () =>
@@ -134,16 +145,6 @@ const Index = () => {
     setHideSubtypeNotes(hidden);
     saveHideSubtypeNotes(vault.location, hidden);
   };
-
-  // Keep a sensible selection as filters change or notes are trashed
-  useEffect(() => {
-    if (vault.status !== "ready") return;
-    const selectionVisible =
-      selectedNote && visibleNotes.some((note) => note.id === selectedNote.id);
-    if (!selectionVisible) {
-      setSelectedNoteId(visibleNotes[0]?.id ?? null);
-    }
-  }, [vault.status, visibleNotes, selectedNote]);
 
   const handleCreateNote = async () => {
     const typePath =
