@@ -1,0 +1,15 @@
+# Local worktrees and generated build output are not part of the Vite website.
+.claude/
+src-tauri/
+node_modules/
+dist/
+
+# Demo production files and local visual QA captures are not used by the site.
+demo-output/
+outputs/
+mobile-preview*.png
+
+# Local tooling state.
+.dyad/
+.DS_Store
+*.tsbuildinfo

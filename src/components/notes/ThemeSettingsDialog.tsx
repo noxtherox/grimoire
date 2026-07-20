@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   Bot,
   CheckCircle2,
+  Download,
   FolderCog,
   FolderOpen,
   MapPin,
@@ -12,6 +13,17 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -158,6 +170,10 @@ export function ThemeSettingsDialog({
     useState<MigrationPreview | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
   const [cliMessage, setCliMessage] = useState("");
+  const [cliMessageKind, setCliMessageKind] = useState<"success" | "error">(
+    "success",
+  );
+  const [cliInstallConfirmOpen, setCliInstallConfirmOpen] = useState(false);
   const { fileLocations, isDesktop, location, notes } = useVault();
   const locationMappings = getFileLocationMappings();
 
@@ -213,8 +229,57 @@ export function ThemeSettingsDialog({
       index,
   );
 
+  const installCli = async (prepareNotes: boolean) => {
+    if (prepareNotes && !location) return;
+
+    setCliBusy(true);
+    setCliMessage("");
+    try {
+      let idsAdded: number | null = null;
+      if (prepareNotes && location) {
+        const pinnedPaths = notes
+          .filter((note) => note.pinned)
+          .map((note) => note.path);
+        const archivedPaths = notes
+          .filter((note) => note.archived)
+          .map((note) => note.path);
+        const migration = await invoke<MigrationPreview>(
+          "cli_migration_apply",
+          { vaultPath: location, pinnedPaths, archivedPaths },
+        );
+        await refreshVaultFromDisk();
+        const nextPreview = await invoke<MigrationPreview>(
+          "cli_migration_preview",
+          { vaultPath: location, pinnedPaths, archivedPaths },
+        );
+        setMigrationPreview(nextPreview);
+        idsAdded = migration.idsAdded;
+      }
+
+      const status = await invoke<CliStatus>("cli_install");
+      setCliStatus(status);
+
+      if (idsAdded !== null) {
+        setCliMessage(
+          idsAdded === 0
+            ? "CLI installed successfully. Your notes already have grimoire-id."
+            : `CLI installed successfully. Added grimoire-id to ${idsAdded} ${idsAdded === 1 ? "note" : "notes"}.`,
+        );
+      } else {
+        setCliMessage(`CLI reinstalled successfully at ${status.executablePath}.`);
+      }
+      setCliMessageKind("success");
+    } catch (error) {
+      setCliMessage(String(error));
+      setCliMessageKind("error");
+    } finally {
+      setCliBusy(false);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100vh-2rem)] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
@@ -259,42 +324,18 @@ export function ThemeSettingsDialog({
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Button
                           size="sm"
-                          disabled={cliBusy || migrationPreview?.blocked}
-                          onClick={async () => {
-                            if (!location) return;
-                            setCliBusy(true);
-                            setCliMessage("");
-                            try {
-                              const pinnedPaths = notes.filter((note) => note.pinned).map((note) => note.path);
-                              const archivedPaths = notes.filter((note) => note.archived).map((note) => note.path);
-                              const preview = await invoke<MigrationPreview>("cli_migration_apply", { vaultPath: location, pinnedPaths, archivedPaths });
-                              setMigrationPreview(preview);
-                              await refreshVaultFromDisk();
-                              setCliMessage(`Prepared ${preview.notesChanged} notes for CLI access.`);
-                            } catch (error) {
-                              setCliMessage(String(error));
-                            } finally {
-                              setCliBusy(false);
-                            }
-                          }}
-                        >
-                          Prepare notes
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={cliBusy}
-                          onClick={async () => {
-                            setCliBusy(true);
-                            setCliMessage("");
-                            try {
-                              const status = await invoke<CliStatus>("cli_install");
-                              setCliStatus(status);
-                              setCliMessage(`CLI installed at ${status.executablePath}`);
-                            } catch (error) {
-                              setCliMessage(String(error));
-                            } finally {
-                              setCliBusy(false);
+                          disabled={
+                            cliBusy ||
+                            (!cliStatus?.installed &&
+                              (!migrationPreview ||
+                                migrationPreview.blocked ||
+                                !location))
+                          }
+                          onClick={() => {
+                            if (cliStatus?.installed) {
+                              void installCli(false);
+                            } else {
+                              setCliInstallConfirmOpen(true);
                             }
                           }}
                         >
@@ -316,7 +357,7 @@ export function ThemeSettingsDialog({
                       <p className="text-sm font-medium">AI agent skills</p>
                       <p className="mt-1 text-xs text-muted-foreground">Install instructions that teach an agent to use Grimoire safely and consistently.</p>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {["Codex", "Claude", "Agent Skills", "Hermes"].map((agent) => (
+                        {["Claude", "Codex", "Hermes"].map((agent) => (
                           <Button
                             key={agent}
                             size="sm"
@@ -327,8 +368,10 @@ export function ThemeSettingsDialog({
                               try {
                                 const path = await invoke<string>("cli_install_skill", { agent: agent.toLowerCase().replace(" ", "-"), profile: null });
                                 setCliMessage(`${agent} skill installed at ${path}`);
+                                setCliMessageKind("success");
                               } catch (error) {
                                 setCliMessage(String(error));
+                                setCliMessageKind("error");
                               } finally {
                                 setCliBusy(false);
                               }
@@ -338,10 +381,62 @@ export function ThemeSettingsDialog({
                           </Button>
                         ))}
                       </div>
+                      <div className="mt-5 border-t border-border pt-4">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5"
+                          disabled={cliBusy}
+                          onClick={async () => {
+                            setCliBusy(true);
+                            try {
+                              const path = await saveDialog({
+                                title: "Download Grimoire skill",
+                                defaultPath: "grimoire-skill.md",
+                                filters: [
+                                  {
+                                    name: "Markdown",
+                                    extensions: ["md"],
+                                  },
+                                ],
+                              });
+                              if (!path) return;
+
+                              setCliMessage("");
+                              const savedPath = await invoke<string>(
+                                "cli_export_skill",
+                                { path },
+                              );
+                              setCliMessage(`Grimoire skill saved to ${savedPath}`);
+                              setCliMessageKind("success");
+                            } catch (error) {
+                              setCliMessage(String(error));
+                              setCliMessageKind("error");
+                            } finally {
+                              setCliBusy(false);
+                            }
+                          }}
+                        >
+                          <Download size={13} />
+                          Download skill for other agents
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
-                {cliMessage && <p className="text-xs text-muted-foreground" role="status">{cliMessage}</p>}
+                {cliMessage && (
+                  <p
+                    className={`flex items-center gap-1 text-xs ${
+                      cliMessageKind === "success"
+                        ? "text-green-600"
+                        : "text-destructive"
+                    }`}
+                    role="status"
+                  >
+                    {cliMessageKind === "success" && <CheckCircle2 size={13} />}
+                    {cliMessage}
+                  </p>
+                )}
               </>
             ) : (
               <div className="rounded-lg border border-border p-3 text-sm">CLI installation is available in the desktop app.</div>
@@ -753,7 +848,33 @@ export function ThemeSettingsDialog({
           </div>
           </TabsContent>
         </Tabs>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={cliInstallConfirmOpen}
+        onOpenChange={setCliInstallConfirmOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Install the Grimoire CLI?</AlertDialogTitle>
+            <AlertDialogDescription>
+              To make your notes safely addressable from the command line,
+              Grimoire will add a hidden <code>grimoire-id</code> property to
+              {migrationPreview
+                ? ` ${migrationPreview.idsAdded} ${migrationPreview.idsAdded === 1 ? "note" : "notes"}`
+                : " your notes"}
+              . This will not change how your notes look or work in the desktop
+              app.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void installCli(true)}>
+              Install CLI
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

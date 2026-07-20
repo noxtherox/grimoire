@@ -135,6 +135,23 @@ fn cli_install_skill(agent: String, profile: Option<String>) -> Result<String, S
     Ok(directory.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+fn cli_export_skill(path: String) -> Result<String, String> {
+    let selected_path = std::path::PathBuf::from(path);
+    let target = if selected_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+    {
+        selected_path
+    } else {
+        std::path::PathBuf::from(format!("{}.md", selected_path.to_string_lossy()))
+    };
+    fs::write(&target, skill_markdown("other agents"))
+        .map_err(|error| format!("Could not save the Grimoire skill: {error}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CliMigrationPreview {
@@ -757,6 +774,7 @@ pub fn run() {
             cli_status,
             cli_install,
             cli_install_skill,
+            cli_export_skill,
             cli_migration_preview,
             cli_migration_apply
         ])
@@ -798,7 +816,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{copy_file_into_vault, write_new_vault_file_impl};
+    use super::{cli_export_skill, copy_file_into_vault, write_new_vault_file_impl};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -871,5 +889,22 @@ mod tests {
 
         fs::remove_dir_all(root).expect("remove test vault");
         fs::remove_dir_all(source_dir).expect("remove source folder");
+    }
+
+    #[test]
+    fn exports_the_generic_skill_as_markdown() {
+        let root = test_root("skill-export");
+        fs::create_dir(&root).expect("create export folder");
+        let requested = root.join("grimoire-skill");
+
+        let saved = cli_export_skill(requested.to_string_lossy().into_owned())
+            .expect("export Grimoire skill");
+        let expected = root.join("grimoire-skill.md");
+        assert_eq!(PathBuf::from(saved), expected);
+        let contents = fs::read_to_string(&expected).expect("read exported skill");
+        assert!(contents.contains("name: grimoire"));
+        assert!(contents.contains("Never edit `grimoire-*` properties directly."));
+
+        fs::remove_dir_all(root).expect("remove export folder");
     }
 }
