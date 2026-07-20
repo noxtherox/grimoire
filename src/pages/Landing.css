@@ -189,14 +189,14 @@ details[open] .faq-close-icon { opacity: 1; }
   .landing-nav { grid-template-columns: 1fr auto; width: min(100% - 32px, 1320px); }
   .landing-nav-links { display: none; }
   .landing-nav-download { font-size: 12px; }
-  .landing-hero { width: min(100% - 32px, 1320px); min-height: 905px; padding: 65px 0 50px; }
+  .landing-hero { width: min(100% - 32px, 1320px); min-height: 0; padding: 65px 0 50px; }
   .landing-hero-copy { width: 100%; }
   .landing-hero h1 { font-size: clamp(55px, 17vw, 80px); line-height: .91; }
   .landing-hero-intro { font-size: 15px; }
   .landing-hero-actions { align-items: stretch; flex-direction: column; }
   .landing-button { width: 100%; }
   .landing-orbit { display: none; }
-  .landing-product { right: auto; bottom: 42px; left: 0; width: 680px; height: 405px; transform: scale(.63) rotate(-1deg); transform-origin: bottom left; }
+  .landing-product { position: relative; right: auto; bottom: auto; left: 0; width: 680px; height: 405px; margin-top: 32px; margin-bottom: -150px; transform: scale(.63); transform-origin: top left; }
   .landing-proof { flex-wrap: wrap; gap: 13px 22px; }
   .landing-proof span { display: none; }
   .landing-proof p { width: calc(50% - 12px); text-align: center; }
