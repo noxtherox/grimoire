@@ -555,19 +555,20 @@ async function canChangeMobileVault(): Promise<boolean> {
 export async function locateMobileVault(): Promise<boolean> {
   if (!isIOSRuntime()) return false;
   if (!(await canChangeMobileVault())) return false;
-  const selected = await pickMobileVaultFolder();
-  if (!selected) return false;
-  const vault = await MobileFolderVault.locate(selected.url, selected.name);
-  if (!vault) {
-    await clearMobileVaultFolder();
+  try {
+    const selected = await pickMobileVaultFolder();
+    if (!selected) return false;
+    const vault = await MobileFolderVault.locate(selected.url, selected.name);
+    if (!vault) return false;
+    await loadVault(vault);
+    return state.status === "ready";
+  } catch (error) {
     setState({
       status: backend ? state.status : "pick-vault",
-      error: "No Grimoire vault was found in that folder.",
+      error: `Could not open that vault: ${String(error)}`,
     });
     return false;
   }
-  await loadVault(vault);
-  return state.status === "ready";
 }
 
 export async function createMobileVaultAtLocation(): Promise<boolean> {

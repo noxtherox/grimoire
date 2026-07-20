@@ -297,17 +297,22 @@ export class MobileFolderVault extends MobileFilesystemVault {
 
   static async restore(rootUrl: string, name: string): Promise<MobileFolderVault> {
     const vault = new MobileFolderVault(rootUrl, name);
-    if (await vault.hasVaultMarker()) return vault;
+    if (
+      name.localeCompare(DEFAULT_VAULT_NAME, undefined, { sensitivity: "accent" }) === 0 ||
+      (await vault.hasVaultMarker()) ||
+      (await vault.hasGrimoireMetadata())
+    ) {
+      return vault;
+    }
 
     const nested = new MobileFolderVault(
       new URL(`${encodeURIComponent(DEFAULT_VAULT_NAME)}/`, vault.root).href,
       DEFAULT_VAULT_NAME,
     );
-    if (await nested.hasVaultMarker()) return nested;
+    if (await nested.rootExists()) return nested;
 
-    // Bookmarks saved by the first mobile build already identify a trusted vault.
-    // Add the marker so future folder discovery can recognize it explicitly.
-    await vault.markAsVault();
+    // The bookmark itself records the user's choice. Existing desktop vaults do
+    // not necessarily contain Grimoire metadata and may have a custom name.
     return vault;
   }
 
@@ -318,7 +323,6 @@ export class MobileFolderVault extends MobileFilesystemVault {
       (await selected.hasVaultMarker()) ||
       (await selected.hasGrimoireMetadata())
     ) {
-      if (!(await selected.hasVaultMarker())) await selected.markAsVault();
       return selected;
     }
 
@@ -326,9 +330,12 @@ export class MobileFolderVault extends MobileFilesystemVault {
       new URL(`${encodeURIComponent(DEFAULT_VAULT_NAME)}/`, selected.root).href,
       DEFAULT_VAULT_NAME,
     );
-    if (!(await nested.rootExists())) return null;
-    if (!(await nested.hasVaultMarker())) await nested.markAsVault();
-    return nested;
+    if (await nested.rootExists()) return nested;
+
+    // Selecting a directory in the document picker is an explicit request to
+    // use that directory as the vault. Do not reject custom-named or older
+    // vaults just because they predate Grimoire's metadata marker.
+    return selected;
   }
 
   static async create(rootUrl: string, name: string): Promise<MobileFolderVault> {
