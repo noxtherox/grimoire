@@ -1,0 +1,7 @@
+[default]
+description = "Default permissions for the plugin"
+permissions = [
+  "allow-pick-vault-folder",
+  "allow-restore-vault-folder",
+  "allow-clear-vault-folder",
+]

@@ -6,7 +6,7 @@ export interface VaultFile {
 }
 
 export interface VaultBackend {
-  readonly kind: "desktop" | "browser";
+  readonly kind: "desktop" | "browser" | "mobile";
   /** Human-readable location of the vault (absolute path, or a label). */
   readonly location: string;
   loadAll(): Promise<VaultFile[]>;

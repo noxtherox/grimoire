@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-restore-vault-folder"
+description = "Enables the restore_vault_folder command without any pre-configured scope."
+commands.allow = ["restore_vault_folder"]
+
+[[permission]]
+identifier = "deny-restore-vault-folder"
+description = "Denies the restore_vault_folder command without any pre-configured scope."
+commands.deny = ["restore_vault_folder"]

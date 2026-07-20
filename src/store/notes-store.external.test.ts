@@ -108,6 +108,7 @@ import {
   getNoteConflict,
   initStore,
   moveExternalNoteToVault,
+  openDocumentPathsFromFinder,
   openExternalNotes,
   revealNoteInDesktop,
   resolveNoteConflict,
@@ -423,5 +424,30 @@ describe("external note store workflow", () => {
     await expect(readFile(managedDocument, "utf8")).resolves.toBe(
       "managed presentation bytes",
     );
+  });
+
+  it("automatically creates a file hub when macOS opens a non-markdown file", async () => {
+    const video = join(root, "one", "Automatic Import.mov");
+    await writeFile(video, "video bytes");
+
+    const ids = await openDocumentPathsFromFinder([video]);
+
+    expect(ids).toHaveLength(1);
+    const imported = getNotes().find((note) => note.id === ids[0]);
+    expect(imported).toBeDefined();
+    expect(getFileHubReference(imported!)).toMatchObject({
+      name: "Automatic Import.mov",
+      kind: "local",
+      managed: false,
+    });
+
+    const savedContent = await readFile(join(vault, imported!.path), "utf8");
+    expect(getFileHubReference(savedContent)).toMatchObject({
+      name: "Automatic Import.mov",
+      kind: "local",
+    });
+
+    await synchronizeDesktopFiles();
+    expect(getNotes().find((note) => note.id === ids[0])).toBeDefined();
   });
 });

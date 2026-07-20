@@ -59,10 +59,21 @@
         "name": "Office document",
         "role": "Viewer",
         "rank": "Alternate"
+      },
+      {
+        "ext": ["*"],
+        "name": "File",
+        "contentTypes": ["public.data"],
+        "role": "Viewer",
+        "rank": "Alternate"
       }
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "iOS": {
+      "minimumSystemVersion": "16.0",
+      "infoPlist": "Info.ios.plist"
     }
   }
 }

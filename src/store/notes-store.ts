@@ -57,6 +57,12 @@ import {
 import type { VaultBackend } from "@/lib/vault/backend";
 import { BrowserVault } from "@/lib/vault/browser";
 import { DesktopVault } from "@/lib/vault/desktop";
+import { MobileFolderVault, MobileVault } from "@/lib/vault/mobile";
+import {
+  clearMobileVaultFolder,
+  pickMobileVaultFolder,
+  restoreMobileVaultFolder,
+} from "@/lib/mobile-vault-picker";
 import { showError } from "@/utils/toast";
 import { loadDefaultNoteType } from "@/lib/note-preferences";
 import {
@@ -140,7 +146,11 @@ let desktopSyncTimer: ReturnType<typeof setInterval> | null = null;
 let desktopSyncInFlight = false;
 const pendingDesktopOpenPaths: string[] = [];
 const desktopOpenListeners = new Set<
-  (ids: string[], firstNoteIsExternal: boolean) => void
+  (
+    ids: string[],
+    firstNoteIsExternal: boolean,
+    firstNoteIsFileHub: boolean,
+  ) => void
 >();
 
 function emit() {
@@ -498,6 +508,28 @@ export function initStore() {
   if (initialized) return;
   initialized = true;
   if (isTauri()) {
+    if (isIOSRuntime()) {
+      void (async () => {
+        try {
+          const saved = await restoreMobileVaultFolder();
+          if (saved) {
+            await loadVault(await MobileFolderVault.restore(saved.url, saved.name));
+            return;
+          }
+        } catch {
+          await clearMobileVaultFolder();
+        }
+
+        const localVault = await MobileVault.restore();
+        if (localVault) {
+          await loadVault(localVault);
+          return;
+        }
+        setState({ status: "pick-vault", location: null, error: null });
+      })()
+        .catch((error) => setState({ status: "error", error: String(error) }));
+      return;
+    }
     installDesktopCloseHook();
     installDesktopOpenHook();
     installDesktopFileSync();
@@ -510,6 +542,49 @@ export function initStore() {
   } else {
     void loadVault(new BrowserVault());
   }
+}
+
+function isIOSRuntime(): boolean {
+  return isTauri() && /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+async function canChangeMobileVault(): Promise<boolean> {
+  return !backend || (await flushAll());
+}
+
+export async function locateMobileVault(): Promise<boolean> {
+  if (!isIOSRuntime()) return false;
+  if (!(await canChangeMobileVault())) return false;
+  const selected = await pickMobileVaultFolder();
+  if (!selected) return false;
+  const vault = await MobileFolderVault.locate(selected.url, selected.name);
+  if (!vault) {
+    await clearMobileVaultFolder();
+    setState({
+      status: backend ? state.status : "pick-vault",
+      error: "No Grimoire vault was found in that folder.",
+    });
+    return false;
+  }
+  await loadVault(vault);
+  return state.status === "ready";
+}
+
+export async function createMobileVaultAtLocation(): Promise<boolean> {
+  if (!isIOSRuntime()) return false;
+  if (!(await canChangeMobileVault())) return false;
+  const selected = await pickMobileVaultFolder();
+  if (!selected) return false;
+  await loadVault(await MobileFolderVault.create(selected.url, selected.name));
+  return state.status === "ready";
+}
+
+export async function createMobileVaultOnDevice(): Promise<boolean> {
+  if (!isIOSRuntime()) return false;
+  if (!(await canChangeMobileVault())) return false;
+  await clearMobileVaultFolder();
+  await loadVault(await MobileVault.open());
+  return state.status === "ready";
 }
 
 export async function chooseVaultFolder() {
@@ -1160,7 +1235,7 @@ async function drainDesktopOpenPaths(): Promise<void> {
         ? isExternalNote(firstNote)
         : false;
       desktopOpenListeners.forEach((listener) =>
-        listener(ids, firstNoteIsExternal),
+        listener(ids, firstNoteIsExternal, !!firstNote && !!getFileHubReference(firstNote)),
       );
     }
   })().finally(() => {
@@ -1169,37 +1244,26 @@ async function drainDesktopOpenPaths(): Promise<void> {
   return desktopOpenDrain;
 }
 
-async function openDocumentPathsFromFinder(paths: string[]): Promise<string[]> {
+export async function openDocumentPathsFromFinder(
+  paths: string[],
+): Promise<string[]> {
   const ids: string[] = [];
   for (const path of paths) {
-    const canonical = await canonicalizeFsPath(path);
-    const existing = await findHubForAbsolutePath(canonical);
-    if (existing) {
-      ids.push(existing.id);
-      continue;
-    }
-    const name = fileNameFromPath(canonical);
-    const stem = name.replace(/\.[^.]+$/, "") || "Document";
-    const note = await createNote(
+    const note = await createUnmanagedFileHubNote(
       loadDefaultNoteType(state.location),
-      `# ${stem}\n\n`,
+      path,
     );
-    if (!note) continue;
-    let result = await attachFileToNote(note.id, canonical, "auto");
-    // Finder must complete without a modal during cold start. An unmatched
-    // document becomes a safe local-only link and can later be copied from the
-    // file card.
-    if (result.status === "needs-choice") {
-      result = await attachFileToNote(note.id, canonical, "local");
-    }
-    if (result.status === "attached") ids.push(note.id);
-    else await deleteNoteForever(note.id);
+    if (note) ids.push(note.id);
   }
   return ids;
 }
 
 export function onDesktopNotesOpened(
-  listener: (ids: string[], firstNoteIsExternal: boolean) => void,
+  listener: (
+    ids: string[],
+    firstNoteIsExternal: boolean,
+    firstNoteIsFileHub: boolean,
+  ) => void,
 ): () => void {
   desktopOpenListeners.add(listener);
   return () => desktopOpenListeners.delete(listener);
@@ -1423,23 +1487,7 @@ export async function createFileNote(
 ): Promise<Note | null> {
   const picked = await chooseDocumentFile();
   if (!picked) return null;
-  const name = fileNameFromPath(picked);
-  const stem = name.replace(/\.[^.]+$/, "") || "Document";
-  const note = await createNote(typePath, `# ${stem}\n\n`);
-  if (!note) return null;
-  let result = await attachFileToNote(note.id, picked, "auto");
-  if (result.status === "duplicate") {
-    await deleteNoteForever(note.id);
-    return getNotes().find((candidate) => candidate.id === result.noteId) ?? null;
-  }
-  if (result.status === "needs-choice") {
-    result = await attachFileToNote(note.id, result.path, "local");
-  }
-  if (result.status !== "attached") {
-    await deleteNoteForever(note.id);
-    return null;
-  }
-  return getNotes().find((candidate) => candidate.id === note.id) ?? note;
+  return createUnmanagedFileHubNote(typePath, picked);
 }
 
 async function findHubForAbsolutePath(
@@ -1454,6 +1502,51 @@ async function findHubForAbsolutePath(
     if (normalizeFsPath(await canonicalizeFsPath(candidate)) === canonical) return note;
   }
   return null;
+}
+
+/**
+ * Creates the note and its unmanaged file-hub metadata in one disk write.
+ * This prevents a focus-triggered vault scan from observing a plain note
+ * between creation and attachment.
+ */
+async function createUnmanagedFileHubNote(
+  typePath: string[],
+  selectedPath: string,
+): Promise<Note | null> {
+  const canonical = await canonicalizeFsPath(selectedPath);
+  const existing = await findHubForAbsolutePath(canonical);
+  if (existing) return existing;
+
+  const id = crypto.randomUUID();
+  const name = fileNameFromPath(canonical);
+  const vaultPath = state.location
+    ? pathInsideRoot(state.location, canonical)
+    : null;
+  const locationMatch = mostSpecificLocation(
+    canonical,
+    state.fileLocations,
+    getFileLocationMappings(),
+  );
+  const reference: FileHubReference = vaultPath
+    ? { id, name, kind: "vault", path: vaultPath, managed: false }
+    : locationMatch
+      ? {
+          id,
+          name,
+          kind: "location",
+          locationId: locationMatch.location.id,
+          path: locationMatch.path,
+          managed: false,
+        }
+      : { id, name, kind: "local", managed: false };
+  const stem = name.replace(/\.[^.]+$/, "") || "Document";
+  const note = await createNote(
+    typePath,
+    setFileHubReference(`# ${stem}\n\n`, reference),
+  );
+  if (!note) return null;
+  if (reference.kind === "local") setFileHubMapping(id, canonical);
+  return note;
 }
 
 async function copyDocumentIntoVault(note: Note, source: string): Promise<string> {
@@ -2071,17 +2164,19 @@ export async function createNote(
     content ? noteTitle({ content, path: "" } as Note) : "Untitled",
   );
   const path = uniquePath(dir, stem);
+  const id = crypto.randomUUID();
+  const persistedContent = setGrimoireState(content, { id });
   const note: Note = {
-    id: crypto.randomUUID(),
+    id,
     path,
-    content,
+    content: persistedContent,
     pinned: false,
     archived: false,
     updatedAt: new Date().toISOString(),
   };
   try {
-    await backend.write(path, content);
-    diskSnapshots.set(note.id, content);
+    await backend.write(path, persistedContent);
+    diskSnapshots.set(note.id, persistedContent);
     setState({ notes: [note, ...state.notes] });
   } catch (error) {
     reportError("create note", error);

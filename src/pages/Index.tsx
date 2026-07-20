@@ -74,9 +74,13 @@ const Index = () => {
 
   useEffect(() => {
     const stopListening = onDesktopNotesOpened(
-      (ids, firstNoteIsExternal) => {
+      (ids, firstNoteIsExternal, firstNoteIsFileHub) => {
         setFilter(
-          firstNoteIsExternal ? { kind: "external" } : { kind: "all" },
+          firstNoteIsFileHub
+            ? { kind: "files" }
+            : firstNoteIsExternal
+              ? { kind: "external" }
+              : { kind: "all" },
         );
         setListFilters(EMPTY_NOTE_LIST_FILTERS);
         setSearch("");

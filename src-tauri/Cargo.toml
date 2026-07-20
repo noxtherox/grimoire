@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/grimoire-core", "crates/grimoire-cli"]
+members = [".", "crates/grimoire-core", "crates/grimoire-cli", "plugins/mobile-vault"]
 resolver = "2"
 
 [package]
@@ -30,6 +30,7 @@ tauri-plugin-log = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-mobile-vault = { path = "plugins/mobile-vault" }
 portable-pty = "0.9.0"
 grimoire-core = { path = "crates/grimoire-core" }
 dirs = "6"

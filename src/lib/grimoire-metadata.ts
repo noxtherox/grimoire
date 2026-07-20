@@ -27,9 +27,12 @@ export function readGrimoireMetadata(content: string) {
 
 export function setGrimoireState(
   content: string,
-  state: { pinned?: boolean; archived?: boolean },
+  state: { id?: string; pinned?: boolean; archived?: boolean },
 ): string {
   let next = content;
+  if (state.id !== undefined) {
+    next = setContentProperty(next, GRIMOIRE_METADATA_KEYS.id, state.id);
+  }
   if (state.archived === true) {
     next = setContentProperty(next, GRIMOIRE_METADATA_KEYS.pinned, null);
   } else if (state.pinned !== undefined) {

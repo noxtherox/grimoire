@@ -128,13 +128,21 @@
   }
 
   .mobile-grimoire-dark {
-    --grim-accent: 255 214 10;
+    --grim-accent: 239 104 96;
     --grim-link: 124 175 255;
     --grim-text: 238 237 234;
     --grim-editor-bg: 24 24 24;
     --grim-surface: 24 24 24;
     --grim-sidebar-bg: 15 15 15;
     --grim-sidebar-fg: 238 237 234;
+  }
+
+  .mobile-native-shell {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .mobile-native-shell .mobile-bottom-search {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
   }
 
   .mobile-note-editor .cm-editor,

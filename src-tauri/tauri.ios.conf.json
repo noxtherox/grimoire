@@ -1,0 +1,22 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Grimoire",
+        "url": "/mobile"
+      }
+    ]
+  },
+  "bundle": {
+    "resources": [],
+    "iOS": {
+      "minimumSystemVersion": "16.0"
+    }
+  }
+}

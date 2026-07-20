@@ -23,6 +23,7 @@ import {
   ChevronsLeft,
   FileStack,
   Files,
+  FolderPlus,
   GripVertical,
   Notebook,
   Pencil,
@@ -86,7 +87,7 @@ import { getFileHubReference } from "@/lib/file-hubs";
 
 interface SidebarProps {
   notes: Note[];
-  /** Types that exist without notes (empty folders) — shown with count 0. */
+  /** Types that exist without notes (empty folders) — still shown in the tree. */
   extraTypes: string[][];
   /** Custom icon per type key — types without one get the folder glyph. */
   typeIcons: TypeIcons;
@@ -140,25 +141,6 @@ function SidebarRow({
       )}
       style={{ paddingLeft: `${depth * 14}px` }}
     >
-      {chevron !== undefined && (
-        <button
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle?.();
-          }}
-          className={cn(
-            "flex h-6 w-5 shrink-0 items-center justify-center text-grim-sidebar-fg/50 hover:text-grim-sidebar-fg/90",
-            chevron === "leaf" && "pointer-events-none opacity-0",
-          )}
-          tabIndex={-1}
-        >
-          {chevron === "open" ? (
-            <ChevronDown size={13} />
-          ) : (
-            <ChevronRight size={13} />
-          )}
-        </button>
-      )}
       <button
         onClick={onClick}
         className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
@@ -171,6 +153,22 @@ function SidebarRow({
           </span>
         )}
       </button>
+      {chevron !== undefined && chevron !== "leaf" && (
+        <button
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle?.();
+          }}
+          className="flex h-6 w-5 shrink-0 items-center justify-center text-grim-sidebar-fg/50 hover:text-grim-sidebar-fg/90"
+          tabIndex={-1}
+        >
+          {chevron === "open" ? (
+            <ChevronDown size={13} />
+          ) : (
+            <ChevronRight size={13} />
+          )}
+        </button>
+      )}
     </div>
   );
 }
@@ -184,6 +182,7 @@ function TypeTreeRows({
   onFilterChange,
   onToggle,
   onRenameType,
+  onAddSubtype,
   onDeleteType,
   onChangeIcon,
   onReorder,
@@ -196,6 +195,7 @@ function TypeTreeRows({
   onFilterChange: (filter: NoteFilter) => void;
   onToggle: (key: string) => void;
   onRenameType: (node: TypeNode) => void;
+  onAddSubtype: (node: TypeNode) => void;
   onDeleteType: (node: TypeNode) => void;
   onChangeIcon: (node: TypeNode) => void;
   onReorder: (
@@ -226,6 +226,7 @@ function TypeTreeRows({
               onFilterChange={onFilterChange}
               onToggle={onToggle}
               onRenameType={onRenameType}
+              onAddSubtype={onAddSubtype}
               onDeleteType={onDeleteType}
               onChangeIcon={onChangeIcon}
               onMoveUp={() =>
@@ -245,6 +246,7 @@ function TypeTreeRows({
                 onFilterChange={onFilterChange}
                 onToggle={onToggle}
                 onRenameType={onRenameType}
+                onAddSubtype={onAddSubtype}
                 onDeleteType={onDeleteType}
                 onChangeIcon={onChangeIcon}
                 onReorder={onReorder}
@@ -268,6 +270,7 @@ function SortableTypeRow({
   onFilterChange,
   onToggle,
   onRenameType,
+  onAddSubtype,
   onDeleteType,
   onChangeIcon,
   onMoveUp,
@@ -283,6 +286,7 @@ function SortableTypeRow({
   onFilterChange: (filter: NoteFilter) => void;
   onToggle: (key: string) => void;
   onRenameType: (node: TypeNode) => void;
+  onAddSubtype: (node: TypeNode) => void;
   onDeleteType: (node: TypeNode) => void;
   onChangeIcon: (node: TypeNode) => void;
   onMoveUp: () => void;
@@ -319,7 +323,6 @@ function SortableTypeRow({
                 />
               }
               label={node.name}
-              count={node.count}
               depth={depth}
               chevron={
                 node.children.length ? (isOpen ? "open" : "closed") : "leaf"
@@ -335,7 +338,10 @@ function SortableTypeRow({
                 event.preventDefault();
                 event.stopPropagation();
               }}
-              className="absolute right-0 top-1/2 flex h-7 w-6 -translate-y-1/2 touch-none cursor-grab items-center justify-center text-grim-sidebar-fg/35 opacity-0 transition-opacity hover:text-grim-sidebar-fg/80 active:cursor-grabbing group-hover/type:opacity-100 focus:opacity-100"
+              className={cn(
+                "absolute top-1/2 flex h-7 w-6 -translate-y-1/2 touch-none cursor-grab items-center justify-center text-grim-sidebar-fg/35 opacity-0 transition-opacity hover:text-grim-sidebar-fg/80 active:cursor-grabbing group-hover/type:opacity-100 focus:opacity-100",
+                node.children.length ? "right-5" : "right-0",
+              )}
               {...attributes}
               {...listeners}
             >
@@ -352,6 +358,12 @@ function SortableTypeRow({
           </ContextMenuItem>
           <ContextMenuItem onClick={() => onChangeIcon(node)}>
             <Smile size={14} className="mr-2" /> Change icon
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={node.path.length >= 3}
+            onClick={() => onAddSubtype(node)}
+          >
+            <FolderPlus size={14} className="mr-2" /> Add subtype
           </ContextMenuItem>
           <ContextMenuItem onClick={() => onRenameType(node)}>
             <Pencil size={14} className="mr-2" /> Rename type
@@ -655,6 +667,7 @@ export function Sidebar({
             onFilterChange={onFilterChange}
             onToggle={toggle}
             onRenameType={startRename}
+            onAddSubtype={(node) => setTypeDraft(`${typeKey(node.path)}/`)}
             onDeleteType={setDeleteTarget}
             onChangeIcon={setIconTarget}
             onReorder={reorderTypes}
