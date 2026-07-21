@@ -204,6 +204,9 @@ describe("external note store workflow", () => {
   });
 
   it("opens, edits, reveals, closes, and moves files from different folders", async () => {
+    expect(mocks.invoke).toHaveBeenCalledWith("cli_register_vault", {
+      vaultPath: vault,
+    });
     expect(
       getNotes().filter((note) => note.path === "inbox/Welcome.md"),
     ).toHaveLength(1);

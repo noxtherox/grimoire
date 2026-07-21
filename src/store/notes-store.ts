@@ -495,6 +495,11 @@ async function loadVault(nextBackend: VaultBackend) {
       typeIcons,
       fileLocations,
     });
+    if (nextBackend.kind === "desktop") {
+      void invoke("cli_register_vault", {
+        vaultPath: nextBackend.location,
+      }).catch((error) => reportError("register vault with CLI", error));
+    }
     void drainDesktopOpenPaths();
   } catch (error) {
     setState({ status: "error", error: String(error) });

@@ -8,6 +8,8 @@ from **Settings → CLI** in the desktop app.
 
 Register vaults with `grimoire vault add NAME PATH`, inspect them with
 `grimoire vault list`, and set a default with `grimoire vault default NAME`.
+The desktop app automatically registers each successfully opened vault and
+makes it the CLI default, including updating the path when a vault is moved.
 Automation should pass `--vault NAME_OR_PATH --json` explicitly. Use `--jsonl`
 for streams and `--no-input` to guarantee that a script never prompts.
 

@@ -14,6 +14,32 @@ import { invoke } from "@tauri-apps/api/core";
 import { TRASH_DIR, MAX_TYPE_DEPTH } from "@/lib/note-utils";
 import type { VaultBackend, VaultFile } from "./backend";
 
+const STARTUP_READ_CONCURRENCY = 32;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index]);
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, items.length) },
+      () => worker(),
+    ),
+  );
+  return results;
+}
+
 /** Reads/writes notes as real .md files inside a user-chosen folder. */
 export class DesktopVault implements VaultBackend {
   readonly kind = "desktop" as const;
@@ -40,37 +66,41 @@ export class DesktopVault implements VaultBackend {
   }
 
   async loadAll(): Promise<VaultFile[]> {
-    const files: VaultFile[] = [];
+    const paths: string[] = [];
 
     const walk = async (relDir: string, depth: number): Promise<void> => {
       const absDir = relDir ? this.abs(relDir) : this.root;
       const entries = await readDir(absDir);
-      for (const entry of entries) {
-        const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
-        if (entry.isDirectory) {
-          const isTrashRoot = relPath === TRASH_DIR;
-          if (entry.name.startsWith(".") && !isTrashRoot) continue;
-          // one extra level inside .trash mirrors the type depth
-          const maxDepth = MAX_TYPE_DEPTH + 1;
-          if (depth < maxDepth) await walk(relPath, depth + 1);
-          continue;
-        }
-        if (!entry.isFile || !/\.md$/i.test(entry.name)) continue;
-        const absPath = this.abs(relPath);
-        const [content, info] = await Promise.all([
-          readTextFile(absPath),
-          stat(absPath),
-        ]);
-        files.push({
-          path: relPath,
-          content,
-          updatedAt: (info.mtime ?? new Date()).toISOString(),
-        });
-      }
+      await Promise.all(
+        entries.map(async (entry) => {
+          const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+          if (entry.isDirectory) {
+            const isTrashRoot = relPath === TRASH_DIR;
+            if (entry.name.startsWith(".") && !isTrashRoot) return;
+            // one extra level inside .trash mirrors the type depth
+            const maxDepth = MAX_TYPE_DEPTH + 1;
+            if (depth < maxDepth) await walk(relPath, depth + 1);
+            return;
+          }
+          if (entry.isFile && /\.md$/i.test(entry.name)) paths.push(relPath);
+        }),
+      );
     };
 
     await walk("", 0);
-    return files;
+    paths.sort((left, right) => left.localeCompare(right));
+    return mapWithConcurrency(paths, STARTUP_READ_CONCURRENCY, async (path) => {
+      const absPath = this.abs(path);
+      const [content, info] = await Promise.all([
+        readTextFile(absPath),
+        stat(absPath),
+      ]);
+      return {
+        path,
+        content,
+        updatedAt: (info.mtime ?? new Date()).toISOString(),
+      };
+    });
   }
 
   private async ensureParentDir(relPath: string): Promise<void> {
@@ -131,15 +161,17 @@ export class DesktopVault implements VaultBackend {
     const dirs: string[] = [];
     const walk = async (relDir: string, depth: number): Promise<void> => {
       const entries = await readDir(relDir ? this.abs(relDir) : this.root);
-      for (const entry of entries) {
-        if (!entry.isDirectory || entry.name.startsWith(".")) continue;
-        const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
-        dirs.push(relPath);
-        if (depth + 1 < MAX_TYPE_DEPTH) await walk(relPath, depth + 1);
-      }
+      await Promise.all(
+        entries.map(async (entry) => {
+          if (!entry.isDirectory || entry.name.startsWith(".")) return;
+          const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+          dirs.push(relPath);
+          if (depth + 1 < MAX_TYPE_DEPTH) await walk(relPath, depth + 1);
+        }),
+      );
     };
     await walk("", 0);
-    return dirs;
+    return dirs.sort((left, right) => left.localeCompare(right));
   }
 
   async writeBinary(path: string, bytes: Uint8Array): Promise<void> {

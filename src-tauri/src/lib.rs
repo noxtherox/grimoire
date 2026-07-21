@@ -92,6 +92,65 @@ fn cli_install(app: tauri::AppHandle) -> Result<CliInstallStatus, String> {
     cli_status()
 }
 
+fn sync_opened_vault_record(
+    registry: &mut grimoire_core::VaultRegistry,
+    manifest: &grimoire_core::VaultManifest,
+    path: std::path::PathBuf,
+) -> grimoire_core::VaultRecord {
+    let existing_name = registry
+        .vaults
+        .iter()
+        .find(|vault| vault.id == manifest.vault_id)
+        .map(|vault| vault.name.clone());
+    let base_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Vault")
+        .to_string();
+    let name = existing_name.unwrap_or_else(|| {
+        let mut candidate = base_name.clone();
+        let mut suffix = 2;
+        while registry
+            .vaults
+            .iter()
+            .any(|vault| vault.name.eq_ignore_ascii_case(&candidate))
+        {
+            candidate = format!("{base_name} ({suffix})");
+            suffix += 1;
+        }
+        candidate
+    });
+    let record = grimoire_core::VaultRecord {
+        id: manifest.vault_id,
+        name,
+        path,
+    };
+    registry.vaults.retain(|vault| vault.id != record.id);
+    registry.vaults.push(record.clone());
+    registry
+        .vaults
+        .sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    registry.default_vault_id = Some(record.id);
+    record
+}
+
+#[tauri::command]
+fn cli_register_vault(vault_path: String) -> Result<grimoire_core::VaultRecord, String> {
+    let root = Path::new(&vault_path)
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the opened vault: {error}"))?;
+    let manifest =
+        grimoire_core::load_or_create_manifest(&root).map_err(|error| error.to_string())?;
+    let registry_path =
+        grimoire_core::default_registry_path().map_err(|error| error.to_string())?;
+    let mut registry =
+        grimoire_core::load_registry(&registry_path).map_err(|error| error.to_string())?;
+    let record = sync_opened_vault_record(&mut registry, &manifest, root);
+    grimoire_core::save_registry(&registry_path, &registry).map_err(|error| error.to_string())?;
+    Ok(record)
+}
+
 fn skill_markdown(agent: &str) -> String {
     format!(
         r#"---
@@ -775,6 +834,7 @@ pub fn run() {
             terminal_stop,
             cli_status,
             cli_install,
+            cli_register_vault,
             cli_install_skill,
             cli_export_skill,
             cli_migration_preview,
@@ -818,7 +878,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{cli_export_skill, copy_file_into_vault, write_new_vault_file_impl};
+    use super::{
+        cli_export_skill, copy_file_into_vault, sync_opened_vault_record, write_new_vault_file_impl,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -842,6 +904,86 @@ mod tests {
             "first"
         );
         fs::remove_dir_all(root).expect("remove test vault");
+    }
+
+    #[test]
+    fn opened_vault_updates_its_registered_path_and_becomes_default() {
+        let original = test_root("registry-original");
+        let moved = test_root("registry-moved");
+        let other_path = test_root("registry-other");
+        fs::create_dir(&original).expect("create original vault");
+        fs::create_dir(&moved).expect("create moved vault");
+        fs::create_dir(&other_path).expect("create other vault");
+        let manifest = grimoire_core::load_or_create_manifest(&original).expect("create manifest");
+        grimoire_core::write_vault_manifest(&moved, &manifest).expect("copy manifest");
+        let other =
+            grimoire_core::load_or_create_manifest(&other_path).expect("create other manifest");
+        let mut registry = grimoire_core::VaultRegistry {
+            version: 1,
+            default_vault_id: Some(other.vault_id),
+            vaults: vec![
+                grimoire_core::VaultRecord {
+                    id: manifest.vault_id,
+                    name: "Grimoire".to_string(),
+                    path: original.clone(),
+                },
+                grimoire_core::VaultRecord {
+                    id: other.vault_id,
+                    name: "Other".to_string(),
+                    path: other_path.clone(),
+                },
+            ],
+        };
+
+        let record = sync_opened_vault_record(&mut registry, &manifest, moved.clone());
+
+        assert_eq!(record.name, "Grimoire");
+        assert_eq!(record.path, moved);
+        assert_eq!(registry.default_vault_id, Some(manifest.vault_id));
+        assert_eq!(
+            registry
+                .vaults
+                .iter()
+                .filter(|vault| vault.id == manifest.vault_id)
+                .count(),
+            1
+        );
+
+        fs::remove_dir_all(original).expect("remove original vault");
+        fs::remove_dir_all(record.path).expect("remove moved vault");
+        fs::remove_dir_all(other_path).expect("remove other vault");
+    }
+
+    #[test]
+    fn opened_vault_gets_a_distinct_name_when_the_folder_name_is_taken() {
+        let first_parent = test_root("registry-first-parent");
+        let second_parent = test_root("registry-second-parent");
+        let first = first_parent.join("Grimoire");
+        let second = second_parent.join("Grimoire");
+        fs::create_dir_all(&first).expect("create first vault");
+        fs::create_dir_all(&second).expect("create second vault");
+        let first_manifest =
+            grimoire_core::load_or_create_manifest(&first).expect("create first manifest");
+        let second_manifest =
+            grimoire_core::load_or_create_manifest(&second).expect("create second manifest");
+        let mut registry = grimoire_core::VaultRegistry {
+            version: 1,
+            default_vault_id: Some(first_manifest.vault_id),
+            vaults: vec![grimoire_core::VaultRecord {
+                id: first_manifest.vault_id,
+                name: "Grimoire".to_string(),
+                path: first,
+            }],
+        };
+
+        let record = sync_opened_vault_record(&mut registry, &second_manifest, second);
+
+        assert_eq!(record.name, "Grimoire (2)");
+        assert_eq!(registry.default_vault_id, Some(second_manifest.vault_id));
+        assert_eq!(registry.vaults.len(), 2);
+
+        fs::remove_dir_all(first_parent).expect("remove first parent");
+        fs::remove_dir_all(second_parent).expect("remove second parent");
     }
 
     #[cfg(unix)]
