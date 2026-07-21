@@ -1,14 +1,14 @@
 import type { PropertyValue } from "@/lib/frontmatter";
 
 /**
- * Property definitions live on a note's top-level type (top-level folder) and
- * cascade to every sub-type below it — sub-folders organize notes but never
- * carry their own property sets. Values are stored per note as YAML
- * frontmatter; definitions are stored per vault in `.grimoire/properties.json`.
+ * Property definitions can live on any note type and cascade to sub-types.
+ * Values are stored per note as YAML frontmatter; definitions are stored per
+ * vault in `.grimoire/properties.json`.
  */
 
 export type PropertyType =
   | "text"
+  | "url"
   | "number"
   | "date"
   | "checkbox"
@@ -28,11 +28,17 @@ export interface PropertyDef {
   relationMultiple?: boolean;
 }
 
-/** Top-level type key ("work") -> property definitions for that type tree. */
+/** Type path key ("work/projects") -> definitions owned by that type tree. */
 export type PropertySchemas = Record<string, PropertyDef[]>;
+
+export interface EffectivePropertyDef {
+  def: PropertyDef;
+  ownerKey: string;
+}
 
 export const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: "text", label: "Text" },
+  { value: "url", label: "URL" },
   { value: "number", label: "Number" },
   { value: "date", label: "Date" },
   { value: "checkbox", label: "Checkbox" },
@@ -40,49 +46,60 @@ export const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: "relation", label: "Relation" },
 ];
 
-/** The schema key for a type path: its top-level type ("" for unfiled notes). */
+/** The schema key for a type path ("" for unfiled notes). */
 export function schemaKeyFor(typePath: string[]): string {
-  return typePath[0] ?? "";
+  return typePath.join("/");
 }
 
 /**
- * Properties that apply to a note of the given type: the definitions on its
- * top-level type, which cascade to every sub-type below it.
+ * Properties that apply to a note of the given type. Parent definitions are
+ * inherited; a same-named definition on a deeper type overrides its parent.
  */
+export function effectivePropertyDefinitions(
+  typePath: string[],
+  schemas: PropertySchemas,
+): EffectivePropertyDef[] {
+  const effective: EffectivePropertyDef[] = [];
+  const positions = new Map<string, number>();
+  const ownerKeys = typePath.length
+    ? typePath.map((_, index) => typePath.slice(0, index + 1).join("/"))
+    : [""];
+
+  for (const ownerKey of ownerKeys) {
+    for (const def of schemas[ownerKey] ?? []) {
+      const name = def.name.toLowerCase();
+      const existing = positions.get(name);
+      const entry = { def, ownerKey };
+      if (existing === undefined) {
+        positions.set(name, effective.length);
+        effective.push(entry);
+      } else {
+        effective[existing] = entry;
+      }
+    }
+  }
+  return effective;
+}
+
 export function effectiveProperties(
   typePath: string[],
   schemas: PropertySchemas,
 ): PropertyDef[] {
-  return schemas[schemaKeyFor(typePath)] ?? [];
+  return effectivePropertyDefinitions(typePath, schemas).map(({ def }) => def);
 }
 
-/**
- * Migrates schemas written before definitions moved to the top-level type:
- * definitions stored on sub-type keys ("work/projects") are hoisted onto
- * their top-level key ("work"), shallower definitions winning on name
- * clashes. Returns null when nothing needed hoisting.
- */
-export function hoistSchemasToTopLevel(
+/** The type path that owns the effective definition, if one applies. */
+export function propertyDefinitionOwner(
+  typePath: string[],
   schemas: PropertySchemas,
-): PropertySchemas | null {
-  if (!Object.keys(schemas).some((key) => key.includes("/"))) return null;
-  const hoisted: PropertySchemas = {};
-  const keys = Object.keys(schemas).sort(
-    (a, b) => a.split("/").length - b.split("/").length,
+  name: string,
+): string | null {
+  const normalized = name.toLowerCase();
+  return (
+    effectivePropertyDefinitions(typePath, schemas).find(
+      ({ def }) => def.name.toLowerCase() === normalized,
+    )?.ownerKey ?? null
   );
-  for (const key of keys) {
-    const topKey = key.split("/")[0];
-    const defs = hoisted[topKey] ?? [];
-    const seen = new Set(defs.map((def) => def.name.toLowerCase()));
-    for (const def of schemas[key] ?? []) {
-      const norm = def.name.toLowerCase();
-      if (seen.has(norm)) continue;
-      seen.add(norm);
-      defs.push(def);
-    }
-    if (defs.length) hoisted[topKey] = defs;
-  }
-  return hoisted;
 }
 
 /** A frontmatter-safe property name (must survive `name: value` parsing). */

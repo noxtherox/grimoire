@@ -45,9 +45,9 @@ import {
 import {
   type PropertyDef,
   type PropertySchemas,
-  hoistSchemasToTopLevel,
   listPropertyValue,
   listSelections,
+  propertyDefinitionOwner,
 } from "@/lib/properties";
 import {
   type TypeIcons,
@@ -383,13 +383,7 @@ async function loadSchemas(
     const raw = await fromBackend.readText(SCHEMAS_PATH);
     const parsed = JSON.parse(raw) as PropertySchemas;
     if (!parsed || typeof parsed !== "object") return {};
-    // one-time migration: older vaults stored definitions per sub-type
-    const hoisted = hoistSchemasToTopLevel(parsed);
-    if (!hoisted) return parsed;
-    await fromBackend
-      .write(SCHEMAS_PATH, JSON.stringify(hoisted, null, 2))
-      .catch(() => {}); // keep the hoisted view even if the write fails
-    return hoisted;
+    return parsed;
   } catch {
     return {}; // missing or unreadable — start empty
   }
@@ -1879,9 +1873,12 @@ function notesOfType(ownerKey: string): Note[] {
   return notesOfTypeKey(state.notes, ownerKey);
 }
 
-/** Definitions always live on the top-level type, whatever key callers pass. */
 function schemaOwnerKey(typeKeyOrPath: string): string {
-  return typeKeyOrPath.split("/")[0];
+  return typeKeyOrPath
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
 }
 
 export function addTypeProperty(typeKeyOrPath: string, def: PropertyDef) {
@@ -1909,11 +1906,19 @@ export function updateTypeProperty(
     (d, i) => i !== idx && d.name.toLowerCase() === def.name.toLowerCase(),
   );
   if (collides) return;
+  const affectedNotes = notesOfType(ownerKey).filter(
+    (note) =>
+      propertyDefinitionOwner(
+        noteTypePath(note),
+        state.schemas,
+        oldName,
+      ) === ownerKey,
+  );
   const next = defs.slice();
   next[idx] = def;
   saveSchemas({ ...state.schemas, [ownerKey]: next });
   if (def.name !== oldName || (def.type === "list" && !def.listMultiple)) {
-    for (const note of notesOfType(ownerKey)) {
+    for (const note of affectedNotes) {
       let migrated = note.content;
       if (def.type === "list" && !def.listMultiple) {
         const values = getNoteProperties(migrated);
@@ -1942,11 +1947,19 @@ export function removeTypeProperty(typeKeyOrPath: string, name: string) {
   const defs = state.schemas[ownerKey] ?? [];
   const next = defs.filter((d) => d.name.toLowerCase() !== name.toLowerCase());
   if (next.length === defs.length) return;
+  const affectedNotes = notesOfType(ownerKey).filter(
+    (note) =>
+      propertyDefinitionOwner(noteTypePath(note), state.schemas, name) ===
+      ownerKey,
+  );
   const schemas = { ...state.schemas };
   if (next.length) schemas[ownerKey] = next;
   else delete schemas[ownerKey];
   saveSchemas(schemas);
-  for (const note of notesOfType(ownerKey)) {
+  for (const note of affectedNotes) {
+    if (propertyDefinitionOwner(noteTypePath(note), schemas, name) !== null) {
+      continue;
+    }
     const stripped = setContentProperty(note.content, name, null);
     if (stripped !== note.content) updateNoteContent(note.id, stripped);
   }

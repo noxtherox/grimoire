@@ -26,6 +26,32 @@ title. Ambiguous interactive selections display title, path, and ID; scripts
 receive an `ambiguous_selector` error instead. Content mutations accept
 `--if-revision sha256:…` for optimistic concurrency.
 
+## Property schemas
+
+Property definitions can be scoped to any type path and are inherited by its
+sub-types. For example, a definition on `Development` applies to Initiatives,
+Epics, and User Stories, while one on `Development/Initiatives` applies only to
+Initiatives and any types nested below it.
+
+```sh
+grimoire --vault VAULT schema add Development/Initiatives Epics relation \
+  --relation-type Development/Epics --multiple
+grimoire --vault VAULT schema add Development/Epics Initiative relation \
+  --relation-type Development/Initiatives
+grimoire --vault VAULT schema add "Development/User Stories" Status list \
+  --options Planned,Active,Done --multiple
+```
+
+`--relation-type` restricts selectable notes to that type and its sub-types.
+`--multiple` enables multiple values on relation or list properties. `--options`
+defines the allowed values for list properties. `schema list TYPE_PATH` returns
+the effective inherited definitions for that type; `schema list` without a path
+returns definitions grouped by their exact owner path.
+
+Removing a definition affects only the exact owner path. Values remain in note
+frontmatter unless `--purge-values --yes` is supplied; a purge is limited to
+the selected type and its sub-types.
+
 ## Hidden metadata and migration
 
 Grimoire reserves `grimoire-*` frontmatter. The current metadata is

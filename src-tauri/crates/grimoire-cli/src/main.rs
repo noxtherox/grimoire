@@ -247,8 +247,23 @@ enum SchemaCommand {
         type_path: String,
         name: String,
         kind: String,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Allowed values for a list property"
+        )]
         options: Vec<String>,
+        #[arg(
+            long,
+            value_name = "TYPE_PATH",
+            help = "Restrict a relation property to this note type and its sub-types"
+        )]
+        relation_type: Option<String>,
+        #[arg(
+            long,
+            help = "Allow more than one value for a list or relation property"
+        )]
+        multiple: bool,
     },
     Remove {
         type_path: String,
@@ -568,6 +583,94 @@ fn save_schemas(root: &Path, schemas: &serde_json::Map<String, Value>) -> Result
     fs::write(&temporary, serde_json::to_vec_pretty(schemas).unwrap())
         .map_err(|e| CliError::new("schema_write_failed", e.to_string(), 5))?;
     fs::rename(temporary, path).map_err(|e| CliError::new("schema_write_failed", e.to_string(), 5))
+}
+
+const MAX_SCHEMA_TYPE_DEPTH: usize = 3;
+
+fn normalize_schema_type_path(input: &str) -> Result<String, CliError> {
+    let normalized = input
+        .trim()
+        .replace('\\', "/");
+    grimoire_core::validate_portable_relative_path(&normalized)
+        .map_err(|error| CliError::new("schema_invalid", error.to_string(), 3))?;
+    if normalized.split('/').count() > MAX_SCHEMA_TYPE_DEPTH {
+        return Err(CliError::new(
+            "schema_invalid",
+            format!("type paths can contain at most {MAX_SCHEMA_TYPE_DEPTH} segments"),
+            3,
+        ));
+    }
+    Ok(normalized)
+}
+
+fn schema_owner_keys(type_path: &str) -> Vec<String> {
+    let segments = type_path.split('/').collect::<Vec<_>>();
+    (1..=segments.len())
+        .map(|depth| segments[..depth].join("/"))
+        .collect()
+}
+
+fn effective_schema_definitions(
+    schemas: &serde_json::Map<String, Value>,
+    type_path: &str,
+) -> Vec<Value> {
+    let mut effective = Vec::<Value>::new();
+    for owner_key in schema_owner_keys(type_path) {
+        let Some(definitions) = schemas.get(&owner_key).and_then(Value::as_array) else {
+            continue;
+        };
+        for definition in definitions {
+            let Some(name) = definition.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(position) = effective.iter().position(|existing| {
+                existing
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(name))
+            }) {
+                effective[position] = definition.clone();
+            } else {
+                effective.push(definition.clone());
+            }
+        }
+    }
+    effective
+}
+
+fn effective_schema_definition_owner(
+    schemas: &serde_json::Map<String, Value>,
+    type_path: &str,
+    name: &str,
+) -> Option<String> {
+    let mut owner = None;
+    for owner_key in schema_owner_keys(type_path) {
+        let defines_property = schemas
+            .get(&owner_key)
+            .and_then(Value::as_array)
+            .is_some_and(|definitions| {
+                definitions.iter().any(|definition| {
+                    definition
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value.eq_ignore_ascii_case(name))
+                })
+            });
+        if defines_property {
+            owner = Some(owner_key);
+        }
+    }
+    owner
+}
+
+fn note_type_key(path: &str) -> String {
+    let mut segments = path.split('/').collect::<Vec<_>>();
+    segments.pop();
+    segments
+        .into_iter()
+        .take(MAX_SCHEMA_TYPE_DEPTH)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn type_matches(path: &str, type_path: &str) -> bool {
@@ -1614,11 +1717,13 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
             let mut schemas = load_schemas(&root)?;
             match command {
                 SchemaCommand::List { type_path } => {
-                    let value = type_path
-                        .as_deref()
-                        .map(|path| path.split('/').next().unwrap_or(""))
-                        .and_then(|key| schemas.get(key).cloned())
-                        .unwrap_or_else(|| Value::Object(schemas.clone()));
+                    let value = match type_path.as_deref() {
+                        Some(path) => {
+                            let key = normalize_schema_type_path(path)?;
+                            Value::Array(effective_schema_definitions(&schemas, &key))
+                        }
+                        None => Value::Object(schemas.clone()),
+                    };
                     success(cli, value.clone(), || {
                         serde_json::to_string_pretty(&value).unwrap()
                     })
@@ -1628,6 +1733,8 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
                     name,
                     kind,
                     options,
+                    relation_type,
+                    multiple,
                 } => {
                     if grimoire_core::is_reserved_key(name) {
                         return Err(CliError::new(
@@ -1638,15 +1745,36 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
                     }
                     if !matches!(
                         kind.as_str(),
-                        "text" | "number" | "date" | "checkbox" | "list" | "relation"
+                        "text" | "url" | "number" | "date" | "checkbox" | "list" | "relation"
                     ) {
                         return Err(CliError::new(
                             "schema_invalid",
-                            "kind must be text, number, date, checkbox, list, or relation",
+                            "kind must be text, url, number, date, checkbox, list, or relation",
                             3,
                         ));
                     }
-                    let key = type_path.split('/').next().unwrap_or("").to_string();
+                    if kind != "list" && !options.is_empty() {
+                        return Err(CliError::new(
+                            "schema_invalid",
+                            "--options can only be used with list properties",
+                            3,
+                        ));
+                    }
+                    if kind != "relation" && relation_type.is_some() {
+                        return Err(CliError::new(
+                            "schema_invalid",
+                            "--relation-type can only be used with relation properties",
+                            3,
+                        ));
+                    }
+                    if *multiple && !matches!(kind.as_str(), "list" | "relation") {
+                        return Err(CliError::new(
+                            "schema_invalid",
+                            "--multiple can only be used with list or relation properties",
+                            3,
+                        ));
+                    }
+                    let key = normalize_schema_type_path(type_path)?;
                     let definitions = schemas
                         .entry(key.clone())
                         .or_insert_with(|| Value::Array(Vec::new()))
@@ -1666,14 +1794,36 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
                         ));
                     }
                     let mut definition = json!({"name": name, "type": kind});
-                    if kind == "list" && !options.is_empty() {
-                        definition["listOptions"] = json!(options);
+                    if kind == "list" {
+                        let mut normalized_options = Vec::<String>::new();
+                        for option in options {
+                            let option = option.trim();
+                            if option.is_empty()
+                                || normalized_options
+                                    .iter()
+                                    .any(|value| value.eq_ignore_ascii_case(option))
+                            {
+                                continue;
+                            }
+                            normalized_options.push(option.to_string());
+                        }
+                        if !normalized_options.is_empty() {
+                            definition["listOptions"] = json!(normalized_options);
+                        }
+                        definition["listMultiple"] = json!(multiple);
                     }
-                    definitions.push(definition);
+                    if kind == "relation" {
+                        if let Some(relation_type) = relation_type {
+                            definition["relationTypeKey"] =
+                                json!(normalize_schema_type_path(relation_type)?);
+                        }
+                        definition["relationMultiple"] = json!(multiple);
+                    }
+                    definitions.push(definition.clone());
                     save_schemas(&root, &schemas)?;
                     success(
                         cli,
-                        json!({"type": key, "name": name, "kind": kind}),
+                        json!({"type": key, "name": name, "kind": kind, "definition": definition}),
                         || format!("Added {name} to {key}"),
                     )
                 }
@@ -1686,25 +1836,31 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
                     if *purge_values && !yes {
                         return Err(CliError::new("approval_required", "purging note values is a data-loss action; preview without --purge-values or re-run with --yes", 6));
                     }
-                    let key = type_path.split('/').next().unwrap_or("").to_string();
-                    let definitions = schemas
-                        .get_mut(&key)
-                        .and_then(Value::as_array_mut)
-                        .ok_or_else(|| {
-                            CliError::new("schema_not_found", "type schema was not found", 3)
-                        })?;
-                    let before = definitions.len();
-                    definitions.retain(|definition| {
-                        !definition["name"]
-                            .as_str()
-                            .is_some_and(|value| value.eq_ignore_ascii_case(name))
-                    });
-                    if definitions.len() == before {
-                        return Err(CliError::new(
-                            "schema_not_found",
-                            "property definition was not found",
-                            3,
-                        ));
+                    let key = normalize_schema_type_path(type_path)?;
+                    let remove_empty_schema = {
+                        let definitions = schemas
+                            .get_mut(&key)
+                            .and_then(Value::as_array_mut)
+                            .ok_or_else(|| {
+                                CliError::new("schema_not_found", "type schema was not found", 3)
+                            })?;
+                        let before = definitions.len();
+                        definitions.retain(|definition| {
+                            !definition["name"]
+                                .as_str()
+                                .is_some_and(|value| value.eq_ignore_ascii_case(name))
+                        });
+                        if definitions.len() == before {
+                            return Err(CliError::new(
+                                "schema_not_found",
+                                "property definition was not found",
+                                3,
+                            ));
+                        }
+                        definitions.is_empty()
+                    };
+                    if remove_empty_schema {
+                        schemas.remove(&key);
                     }
                     save_schemas(&root, &schemas)?;
                     let mut transactions = Vec::new();
@@ -1712,7 +1868,15 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
                         for note in scan_vault(&root)
                             .map_err(|e| CliError::new("vault_unavailable", e.to_string(), 2))?
                             .iter()
-                            .filter(|note| note.path.split('/').next() == Some(key.as_str()))
+                            .filter(|note| type_matches(&note.path, &key))
+                            .filter(|note| {
+                                effective_schema_definition_owner(
+                                    &schemas,
+                                    &note_type_key(&note.path),
+                                    name,
+                                )
+                                .is_none()
+                            })
                         {
                             let next = set_property(&note.content, name, None)
                                 .map_err(|e| CliError::new("property_invalid", e.to_string(), 3))?;

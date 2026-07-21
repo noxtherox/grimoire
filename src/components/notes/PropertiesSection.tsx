@@ -3,9 +3,11 @@ import {
   ArrowLeftRight,
   Calendar,
   CheckSquare,
+  ExternalLink,
   Hash,
   Link,
   List,
+  Pencil,
   Plus,
   SlidersHorizontal,
   Type as TypeIcon,
@@ -34,7 +36,7 @@ import {
   type PropertyDef,
   type PropertySchemas,
   type PropertyType,
-  effectiveProperties,
+  effectivePropertyDefinitions,
   inferPropertyType,
   listPropertyValue,
   listSelections,
@@ -64,9 +66,14 @@ import { cn } from "@/lib/utils";
 import { FILE_HUB_PROPERTY_KEYS } from "@/lib/file-hubs";
 import { isReservedGrimoireProperty } from "@/lib/grimoire-metadata";
 import { hasRelationTo } from "@/lib/links";
+import {
+  normalizeExternalUrl,
+  openExternalUrl,
+} from "@/lib/external-links";
 
 const TYPE_ICONS: Record<PropertyType, typeof TypeIcon> = {
   text: TypeIcon,
+  url: ExternalLink,
   number: Hash,
   date: Calendar,
   checkbox: CheckSquare,
@@ -222,6 +229,61 @@ function ListValueEditor({
         </Popover>
       )}
     </div>
+  );
+}
+
+function UrlValueEditor({
+  value,
+  onCommit,
+}: {
+  value: PropertyValue | undefined;
+  onCommit: (value: PropertyValue | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const text = value === undefined ? "" : String(value);
+  const normalized = normalizeExternalUrl(text);
+
+  if (!editing && normalized) {
+    return (
+      <div className="flex min-h-6 min-w-0 items-center gap-1 px-1.5 text-xs">
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-1 text-left text-grim-link hover:underline"
+          title={`Open ${normalized}`}
+          onClick={() => void openExternalUrl(normalized)}
+        >
+          <span className="truncate">{text}</span>
+          <ExternalLink size={11} className="shrink-0" />
+        </button>
+        <button
+          type="button"
+          className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground hover:opacity-100"
+          aria-label={`Edit URL ${text}`}
+          title="Edit URL"
+          onClick={() => setEditing(true)}
+        >
+          <Pencil size={11} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <Input
+      type="url"
+      autoFocus={editing}
+      key={text}
+      defaultValue={text}
+      placeholder="https://example.com"
+      className={inputClass}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+      onBlur={(event) => {
+        onCommit(event.target.value.trim() || null);
+        setEditing(false);
+      }}
+    />
   );
 }
 
@@ -454,6 +516,9 @@ function ValueEditor({
   }
   if (type === "list") {
     return <ListValueEditor def={def} value={value} onCommit={onCommit} />;
+  }
+  if (type === "url") {
+    return <UrlValueEditor value={value} onCommit={onCommit} />;
   }
   return (
     <WrapTextarea
@@ -700,16 +765,25 @@ export function PropertiesSection({
   const nameColumnClass = expanded ? "w-48" : "w-28";
   const { schemas, extraTypes } = useVault();
   const [addOpen, setAddOpen] = useState(false);
+  const [addOwnerKey, setAddOwnerKey] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
 
   const typePath = noteTypePath(note);
   const ownKey = typeKey(typePath);
-  // definitions live on the top-level type and cascade to every sub-type
-  const topKey = schemaKeyFor(typePath);
-  const topLabel = topKey || "unfiled";
-  const effective = effectiveProperties(typePath, schemas).filter(
-    (def) => !isReservedGrimoireProperty(def.name),
-  );
+  const currentKey = schemaKeyFor(typePath);
+  const currentLabel = currentKey || "unfiled";
+  const availableOwnerKeys = typePath.length
+    ? typePath.map((_, index) => typePath.slice(0, index + 1).join("/"))
+    : [""];
+  const selectedAddOwnerKey = availableOwnerKeys.includes(addOwnerKey)
+    ? addOwnerKey
+    : currentKey;
+  const selectedAddOwnerLabel = selectedAddOwnerKey || "unfiled";
+  const effectiveEntries = effectivePropertyDefinitions(
+    typePath,
+    schemas,
+  ).filter(({ def }) => !isReservedGrimoireProperty(def.name));
+  const effective = effectiveEntries.map(({ def }) => def);
   const values = getNoteProperties(note.content);
   const existingTypePaths = getAllTypePaths(allNotes, extraTypes);
 
@@ -742,14 +816,18 @@ export function PropertiesSection({
         {effective.length === 0 && extras.length === 0 && (
           <p className="px-1 pb-1 text-xs text-muted-foreground">
             Properties added here apply to every{" "}
-            <span className="font-medium">{topLabel}</span> note, including
+            <span className="font-medium">{currentLabel}</span> note, including
             sub-types.
           </p>
         )}
-        {effective.map((def) => {
+        {effectiveEntries.map(({ def, ownerKey }) => {
           const Icon = TYPE_ICONS[def.type];
+          const ownerLabel = ownerKey || "unfiled";
           return (
-            <div key={def.name} className="flex items-start gap-1">
+            <div
+              key={`${ownerKey}:${def.name}`}
+              className="flex items-start gap-1"
+            >
               <Popover
                 open={editing === `def:${def.name}`}
                 onOpenChange={(open) =>
@@ -759,7 +837,7 @@ export function PropertiesSection({
                 <PopoverTrigger asChild>
                   <button
                     className={`flex ${nameColumnClass} shrink-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground`}
-                    title={`Defined on "${topLabel}" — applies to it and all its sub-types`}
+                    title={`Defined on "${ownerLabel}" — applies to it and all its sub-types`}
                   >
                     <Icon size={12} className="shrink-0 opacity-70" />
                     <span className="truncate">{def.name}</span>
@@ -768,18 +846,18 @@ export function PropertiesSection({
                 <PopoverContent className="w-56 p-3" align="start">
                   <p className="mb-2 text-xs text-muted-foreground">
                     Edits apply to all{" "}
-                    <span className="font-medium">{topLabel}</span> notes.
+                    <span className="font-medium">{ownerLabel}</span> notes.
                   </p>
                   <DefForm
                     initial={def}
                     submitLabel="Save"
                     existingTypePaths={existingTypePaths}
                     onSubmit={(next) => {
-                      updateTypeProperty(topKey, def.name, next);
+                      updateTypeProperty(ownerKey, def.name, next);
                       setEditing(null);
                     }}
                     onDelete={() => {
-                      removeTypeProperty(topKey, def.name);
+                      removeTypeProperty(ownerKey, def.name);
                       setEditing(null);
                     }}
                   />
@@ -833,7 +911,7 @@ export function PropertiesSection({
                       const name = sanitizePropertyName(key);
                       if (name) {
                         addTypeProperty(
-                          topKey,
+                          currentKey,
                           inferredType === "list"
                             ? {
                                 name,
@@ -849,7 +927,7 @@ export function PropertiesSection({
                     }}
                   >
                     <Plus size={12} className="mr-1.5" />
-                    Add to “{topLabel}”
+                    Add to “{currentLabel}”
                   </Button>
                   <Button
                     size="sm"
@@ -878,7 +956,13 @@ export function PropertiesSection({
             </div>
           );
         })}
-        <Popover open={addOpen} onOpenChange={setAddOpen}>
+        <Popover
+          open={addOpen}
+          onOpenChange={(open) => {
+            setAddOpen(open);
+            if (open) setAddOwnerKey(currentKey);
+          }}
+        >
           <PopoverTrigger asChild>
             <Button
               variant="ghost"
@@ -891,14 +975,31 @@ export function PropertiesSection({
           </PopoverTrigger>
           <PopoverContent className="w-56 p-3" align="start">
             <p className="mb-2 text-xs text-muted-foreground">
-              Added to every <span className="font-medium">{topLabel}</span>{" "}
-              note, including sub-types.
+              Added to every{" "}
+              <span className="font-medium">{selectedAddOwnerLabel}</span> note,
+              including sub-types.
             </p>
+            {availableOwnerKeys.length > 1 && (
+              <label className="mb-2 block text-xs text-muted-foreground">
+                Apply to
+                <select
+                  value={selectedAddOwnerKey}
+                  onChange={(event) => setAddOwnerKey(event.target.value)}
+                  className="mt-1 h-7 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                >
+                  {[...availableOwnerKeys].reverse().map((ownerKey) => (
+                    <option key={ownerKey} value={ownerKey}>
+                      {ownerKey}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <DefForm
               submitLabel="Add"
               existingTypePaths={existingTypePaths}
               onSubmit={(def) => {
-                addTypeProperty(topKey, def);
+                addTypeProperty(selectedAddOwnerKey, def);
                 setAddOpen(false);
               }}
             />

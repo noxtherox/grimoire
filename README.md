@@ -24,8 +24,8 @@ same vault with a text editor, Git, sync software, or any other Markdown tool.
   lists, tables, links, tags, pasted images, and keyboard-friendly formatting.
 - **Connected notes** — autocomplete `[[wikilinks]]`, follow links from the
   editor, create missing notes, and inspect backlinks grouped by note type.
-- **Structured properties** — define text, number, date, checkbox, list, and
-  note-relation fields. Values remain readable YAML frontmatter.
+- **Structured properties** — define text, URL, number, date, checkbox, list,
+  and note-relation fields. Values remain readable YAML frontmatter.
 - **Fast organization** — search and filter by type, date, and properties;
   reorder types; pin or archive notes; and use a recoverable vault-local trash.
 - **Work with files outside the vault** — open standalone Markdown notes without

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  effectiveProperties,
+  effectivePropertyDefinitions,
   listPropertyValue,
   listSelections,
   normalizeListOptions,
+  propertyDefinitionOwner,
+  schemaKeyFor,
 } from "./properties";
 
 describe("list properties", () => {
@@ -26,5 +30,54 @@ describe("list properties", () => {
       "Done",
     ]);
     expect(listPropertyValue([], true)).toBeNull();
+  });
+});
+
+describe("type property inheritance", () => {
+  const schemas = {
+    Development: [
+      { name: "Company", type: "relation" as const },
+      { name: "Status", type: "text" as const },
+    ],
+    "Development/Initiatives": [
+      { name: "Epics", type: "relation" as const },
+      { name: "Status", type: "list" as const, listOptions: ["Active"] },
+    ],
+  };
+
+  it("uses the complete type path as the schema key", () => {
+    expect(schemaKeyFor(["Development", "Initiatives"])).toBe(
+      "Development/Initiatives",
+    );
+  });
+
+  it("inherits parent properties and lets the subtype override by name", () => {
+    expect(
+      effectiveProperties(["Development", "Initiatives"], schemas),
+    ).toEqual([
+      { name: "Company", type: "relation" },
+      { name: "Status", type: "list", listOptions: ["Active"] },
+      { name: "Epics", type: "relation" },
+    ]);
+  });
+
+  it("retains the owner of every effective definition", () => {
+    expect(
+      effectivePropertyDefinitions(
+        ["Development", "Initiatives"],
+        schemas,
+      ).map(({ def, ownerKey }) => [def.name, ownerKey]),
+    ).toEqual([
+      ["Company", "Development"],
+      ["Status", "Development/Initiatives"],
+      ["Epics", "Development/Initiatives"],
+    ]);
+    expect(
+      propertyDefinitionOwner(
+        ["Development", "Initiatives"],
+        schemas,
+        "status",
+      ),
+    ).toBe("Development/Initiatives");
   });
 });

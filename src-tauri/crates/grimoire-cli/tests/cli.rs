@@ -230,3 +230,168 @@ fn bulk_requires_preview_then_approval() {
         .unwrap()
         .contains("status: done"));
 }
+
+#[test]
+fn adds_inherited_and_subtype_relation_schemas() {
+    let vault = fixture();
+    cli()
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "schema",
+            "add",
+            "Development",
+            "Company",
+            "relation",
+            "--relation-type",
+            "Companies",
+        ])
+        .assert()
+        .success();
+    cli()
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "schema",
+            "add",
+            "Development/Initiatives",
+            "Epics",
+            "relation",
+            "--relation-type",
+            "Development/Epics",
+            "--multiple",
+        ])
+        .assert()
+        .success();
+
+    let schemas: Value =
+        serde_json::from_slice(&fs::read(vault.path().join(".grimoire/properties.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        schemas["Development/Initiatives"][0]["relationTypeKey"],
+        "Development/Epics"
+    );
+    assert_eq!(
+        schemas["Development/Initiatives"][0]["relationMultiple"],
+        true
+    );
+    assert!(schemas.get("Development").is_some());
+
+    let output = cli()
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "--json",
+            "schema",
+            "list",
+            "Development/Initiatives",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let names = value["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|definition| definition["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["Company", "Epics"]);
+}
+
+#[test]
+fn writes_list_multiplicity_and_rejects_kind_specific_flags() {
+    let vault = fixture();
+    cli()
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "schema",
+            "add",
+            "Development/Epics",
+            "Labels",
+            "list",
+            "--options",
+            " Planned, Active,active ",
+            "--multiple",
+        ])
+        .assert()
+        .success();
+    let schemas: Value =
+        serde_json::from_slice(&fs::read(vault.path().join(".grimoire/properties.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        schemas["Development/Epics"][0]["listOptions"],
+        serde_json::json!(["Planned", "Active"])
+    );
+    assert_eq!(schemas["Development/Epics"][0]["listMultiple"], true);
+
+    let output = cli()
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "--json",
+            "schema",
+            "add",
+            "Development/Epics",
+            "Owner",
+            "text",
+            "--relation-type",
+            "People",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "schema_invalid");
+}
+
+#[test]
+fn removing_and_purging_a_subtype_schema_does_not_touch_siblings() {
+    let vault = fixture();
+    fs::create_dir_all(vault.path().join("Development/Initiatives")).unwrap();
+    fs::create_dir_all(vault.path().join("Development/Epics")).unwrap();
+    fs::write(
+        vault.path().join("Development/Initiatives/Initiative.md"),
+        "---\ngrimoire-id: 019f7922-8fae-7733-8357-48b16a134c41\nEpics: Epic One\n---\n# Initiative One\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("Development/Epics/Epic.md"),
+        "---\ngrimoire-id: 019f7922-8fae-7733-8357-48b16a134c42\nEpics: Keep me\n---\n# Epic One\n",
+    )
+    .unwrap();
+    cli()
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "schema",
+            "add",
+            "Development/Initiatives",
+            "Epics",
+            "relation",
+            "--relation-type",
+            "Development/Epics",
+        ])
+        .assert()
+        .success();
+    cli()
+        .args([
+            "--vault",
+            vault.path().to_str().unwrap(),
+            "schema",
+            "remove",
+            "Development/Initiatives",
+            "Epics",
+            "--purge-values",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    let initiative =
+        fs::read_to_string(vault.path().join("Development/Initiatives/Initiative.md")).unwrap();
+    let epic = fs::read_to_string(vault.path().join("Development/Epics/Epic.md")).unwrap();
+    assert!(!initiative.contains("Epics:"));
+    assert!(epic.contains("Epics: Keep me"));
+}

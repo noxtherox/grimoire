@@ -290,7 +290,7 @@ function LibraryDrawer({ counts, typeTree, typeIcons, onClose, onSelect, onCreat
     </button>
   );
   return (
-    <div className="absolute inset-0 z-40 flex min-h-0 flex-col bg-[#1c1c1e]" role="dialog" aria-modal="true" aria-label="Grimoire navigation">
+    <div className="mobile-library-enter absolute inset-0 z-40 flex min-h-0 flex-col bg-[#1c1c1e]" role="dialog" aria-modal="true" aria-label="Grimoire navigation">
       <header className="z-10 flex shrink-0 items-center justify-between border-b border-white/[0.06] bg-[#1c1c1e]/95 px-5 pb-4 pt-[max(2.75rem,env(safe-area-inset-top))] backdrop-blur-xl">
         <h2 className="text-[30px] font-bold tracking-[-0.04em]">Grimoire</h2>
         <Button variant="ghost" size="icon" onClick={onClose} className="h-10 w-10 rounded-full bg-white/[0.08] text-[#f5f5f7] hover:bg-white/[0.12]" aria-label="Close Grimoire navigation"><X className="h-5 w-5" /></Button>
@@ -456,8 +456,8 @@ function Composer({ onClose, onSave, typePath }: ComposerProps) {
   const [body, setBody] = useState("");
 
   return (
-    <div className="absolute inset-0 z-40 flex items-end bg-black/20 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="New note">
-      <div className="flex h-[82%] w-full flex-col rounded-t-[28px] bg-[#fffefa] shadow-2xl dark:bg-[#1c1d1e]">
+    <div className="mobile-composer-backdrop-enter absolute inset-0 z-40 flex items-end bg-black/20 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="New note">
+      <div className="mobile-composer-sheet-enter flex h-[82%] w-full flex-col rounded-t-[28px] bg-[#fffefa] shadow-2xl dark:bg-[#1c1d1e]">
         <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-[#d7d3cd] dark:bg-white/20" />
         <header className="flex items-center justify-between px-4 py-3">
           <Button variant="ghost" size="icon" className="rounded-full dark:text-[#f5f3ef]" onClick={onClose} aria-label="Close composer"><X className="h-5 w-5" /></Button>
