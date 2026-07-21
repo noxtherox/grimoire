@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowDown,
@@ -389,9 +389,12 @@ function NoteView({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-[#1c1d1e]">
-      <header className="relative z-20 flex h-12 shrink-0 items-center justify-between px-2">
+      <header className="relative z-20 grid h-[60px] shrink-0 grid-cols-[44px_1fr_44px] items-center px-4 pb-3 pt-1">
         <Button variant="ghost" size="icon" className="h-11 w-11 touch-manipulation rounded-full bg-[#f0efed] hover:bg-[#e9e7e3] dark:bg-white/[0.08] dark:text-[#f5f3ef] dark:hover:bg-white/[0.12]" onClick={onBack} aria-label="Back to notes"><ArrowLeft className="h-5 w-5" /></Button>
-        <span className="text-xs font-medium text-[#99958f] dark:text-[#8b8883]">{presentedNote.type}</span>
+        <span className="flex min-w-0 max-w-full items-center justify-center gap-1.5 justify-self-center text-[14px] font-medium leading-none text-[#99958f] dark:text-[#8b8883]">
+          <TypeIcon icon={presentedNote.emoji ?? undefined} size={16} className="shrink-0" />
+          <span className="truncate">{presentedNote.type}</span>
+        </span>
         <Button variant="ghost" size="icon" className="h-11 w-11 touch-manipulation rounded-full bg-[#f0efed] hover:bg-[#e9e7e3] dark:bg-white/[0.08] dark:text-[#f5f3ef] dark:hover:bg-white/[0.12]" onClick={() => setPropertiesOpen(true)} aria-label="View properties"><Link2 className="h-[18px] w-[18px]" /></Button>
       </header>
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pt-5">
@@ -605,6 +608,30 @@ export function MobileGrimoire() {
   const [renameDraft, setRenameDraft] = useState("");
   const [iconTarget, setIconTarget] = useState<TypeNode | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TypeNode | null>(null);
+
+  useLayoutEffect(() => {
+    if (!isNativeApp) return;
+
+    const safeAreaProbe = document.createElement("div");
+    safeAreaProbe.style.cssText = [
+      "position:fixed",
+      "visibility:hidden",
+      "pointer-events:none",
+      "padding-top:env(safe-area-inset-top)",
+    ].join(";");
+    document.body.appendChild(safeAreaProbe);
+
+    const safeAreaTop = getComputedStyle(safeAreaProbe).paddingTop;
+    safeAreaProbe.remove();
+    document.documentElement.style.setProperty(
+      "--mobile-safe-area-top",
+      safeAreaTop,
+    );
+
+    return () => {
+      document.documentElement.style.removeProperty("--mobile-safe-area-top");
+    };
+  }, [isNativeApp]);
 
   useEffect(() => {
     document.documentElement.classList.add("mobile-grimoire-page");

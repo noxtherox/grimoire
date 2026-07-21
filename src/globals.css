@@ -154,7 +154,7 @@
   }
 
   .mobile-native-shell {
-    padding-top: env(safe-area-inset-top);
+    padding-top: var(--mobile-safe-area-top, env(safe-area-inset-top));
   }
 
   .mobile-native-shell .mobile-bottom-search {

@@ -13,18 +13,30 @@ final class MobileVaultPlugin: Plugin, UIDocumentPickerDelegate {
   private var pendingPickerInvoke: Invoke?
   private var pendingPickerKind: PickerKind?
   private var documentController: UIDocumentInteractionController?
+  private var webviewOffsetObservation: NSKeyValueObservation?
 
   @objc public override func load(webview: WKWebView) {
     let appBackground = UIColor(red: 28 / 255, green: 29 / 255, blue: 30 / 255, alpha: 1)
     webview.overrideUserInterfaceStyle = .dark
     webview.backgroundColor = appBackground
     webview.scrollView.backgroundColor = appBackground
+    webview.scrollView.contentInsetAdjustmentBehavior = .never
+    webview.scrollView.contentInset = .zero
+    webview.scrollView.bounces = false
+    webviewOffsetObservation = webview.scrollView.observe(
+      \.contentOffset,
+      options: [.new]
+    ) { scrollView, _ in
+      guard scrollView.contentOffset != .zero else { return }
+      scrollView.setContentOffset(.zero, animated: false)
+    }
     manager.viewController?.view.backgroundColor = appBackground
     _ = try? restoreBookmark()
     restoreExternalBookmarks()
   }
 
   deinit {
+    webviewOffsetObservation?.invalidate()
     stopActiveAccess()
     stopExternalAccess()
   }
