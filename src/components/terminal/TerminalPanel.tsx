@@ -119,6 +119,8 @@ export function TerminalPanel({
   const outputBufferRef = useRef(new Map<number, Uint8Array[]>());
   const startingRef = useRef(false);
   const hasStartedRef = useRef(false);
+  const openRef = useRef(open);
+  openRef.current = open;
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [exit, setExit] = useState<TerminalExitEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +151,7 @@ export function TerminalPanel({
   }, []);
 
   const resizeTerminal = useCallback(() => {
-    if (!open) return;
+    if (!openRef.current) return;
     const terminal = terminalRef.current;
     const fitAddon = fitAddonRef.current;
     if (!terminal || !fitAddon) return;
@@ -166,7 +168,7 @@ export function TerminalPanel({
     } catch {
       // The panel may be between display states; the next observer tick retries.
     }
-  }, [open]);
+  }, []);
 
   const startSession = useCallback(
     async (directory: string) => {

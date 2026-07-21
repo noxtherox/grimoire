@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { GrimoireLogo } from "@/components/GrimoireLogo";
 import {
   DEFAULT_TYPE,
+  MAX_TYPE_DEPTH,
   type Note,
   type TypeNode,
   buildTypeTree,
@@ -83,6 +84,7 @@ import { Input } from "@/components/ui/input";
 import { ThemeSettingsDialog } from "./ThemeSettingsDialog";
 import { TypeIcon } from "./TypeIcon";
 import { EmojiPickerDialog } from "./EmojiPickerDialog";
+import { TypeCreationDialog } from "./TypeCreationDialog";
 import { getFileHubReference } from "@/lib/file-hubs";
 
 interface SidebarProps {
@@ -360,7 +362,7 @@ function SortableTypeRow({
             <Smile size={14} className="mr-2" /> Change icon
           </ContextMenuItem>
           <ContextMenuItem
-            disabled={node.path.length >= 3}
+            disabled={node.path.length >= MAX_TYPE_DEPTH}
             onClick={() => onAddSubtype(node)}
           >
             <FolderPlus size={14} className="mr-2" /> Add subtype
@@ -417,8 +419,20 @@ export function Sidebar({
     }),
   );
 
-  // null = not creating a type; otherwise the draft text in the inline input
+  // null = no creation dialog; parent path is kept separate so the field only
+  // contains the new type's name.
   const [typeDraft, setTypeDraft] = useState<string | null>(null);
+  const [typeParentPath, setTypeParentPath] = useState<string[]>([]);
+
+  const startTypeCreation = (parentPath: string[] = []) => {
+    setTypeParentPath(parentPath);
+    setTypeDraft("");
+  };
+
+  const closeTypeCreation = () => {
+    setTypeDraft(null);
+    setTypeParentPath([]);
+  };
 
   const reorderTypes = (
     sourceKey: string,
@@ -445,9 +459,9 @@ export function Sidebar({
     reorderTypes(sourceKey, targetKey, placement);
   };
 
-  const submitNewType = async () => {
-    const path = parseTypePath(typeDraft ?? "");
-    setTypeDraft(null);
+  const submitNewType = async (name: string) => {
+    const path = [...typeParentPath, name].slice(0, MAX_TYPE_DEPTH);
+    closeTypeCreation();
     if (!path.length) return;
     const existingKeys = new Set(flattenTypeKeys(tree));
     const created = await createType(path);
@@ -625,34 +639,13 @@ export function Sidebar({
             Types
           </span>
           <button
-            onClick={() => setTypeDraft("")}
+            onClick={() => startTypeCreation()}
             title="New type — it can stay empty until you add notes"
             className="text-grim-sidebar-fg/40 transition-colors hover:text-grim-sidebar-fg/90"
           >
             <Plus size={13} />
           </button>
         </div>
-        {typeDraft !== null && (
-          <form
-            className="px-1 pb-1"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submitNewType();
-            }}
-          >
-            <input
-              autoFocus
-              value={typeDraft}
-              onChange={(event) => setTypeDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setTypeDraft(null);
-              }}
-              onBlur={() => setTypeDraft(null)}
-              placeholder="new type (e.g. work/projects)"
-              className="w-full rounded-md border border-grim-sidebar-fg/10 bg-grim-sidebar-fg/5 px-2 py-1 text-sm text-grim-sidebar-fg placeholder:text-grim-sidebar-fg/40 focus:outline-none focus:ring-1 focus:ring-grim-sidebar-fg/25"
-            />
-          </form>
-        )}
         <DndContext
           sensors={typeSensors}
           collisionDetection={closestCenter}
@@ -667,7 +660,7 @@ export function Sidebar({
             onFilterChange={onFilterChange}
             onToggle={toggle}
             onRenameType={startRename}
-            onAddSubtype={(node) => setTypeDraft(`${typeKey(node.path)}/`)}
+            onAddSubtype={(node) => startTypeCreation(node.path)}
             onDeleteType={setDeleteTarget}
             onChangeIcon={setIconTarget}
             onReorder={reorderTypes}
@@ -716,6 +709,16 @@ export function Sidebar({
         onPick={(icon) => {
           if (iconTarget) setTypeIcon(iconTarget.path, icon);
         }}
+      />
+      <TypeCreationDialog
+        open={typeDraft !== null}
+        parentPath={typeParentPath}
+        draft={typeDraft ?? ""}
+        onDraftChange={setTypeDraft}
+        onOpenChange={(open) => {
+          if (!open) closeTypeCreation();
+        }}
+        onSubmit={(name) => void submitNewType(name)}
       />
       <Dialog
         open={renameTarget !== null}

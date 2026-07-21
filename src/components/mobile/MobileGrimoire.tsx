@@ -48,6 +48,7 @@ import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
 import { PropertiesSection } from "@/components/notes/PropertiesSection";
 import { EmojiPickerDialog } from "@/components/notes/EmojiPickerDialog";
 import { TypeIcon } from "@/components/notes/TypeIcon";
+import { TypeCreationDialog } from "@/components/notes/TypeCreationDialog";
 import { cn } from "@/lib/utils";
 import { noteBody } from "@/lib/frontmatter";
 import {
@@ -604,6 +605,7 @@ export function MobileGrimoire() {
   const [defaultNoteType, setDefaultNoteTypeState] = useState<string[]>(() => loadDefaultNoteType(null));
   const [typeActionTarget, setTypeActionTarget] = useState<TypeActionTarget | null>(null);
   const [typeDraft, setTypeDraft] = useState<string | null>(null);
+  const [typeParentPath, setTypeParentPath] = useState<string[]>([]);
   const [renameTarget, setRenameTarget] = useState<TypeNode | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [iconTarget, setIconTarget] = useState<TypeNode | null>(null);
@@ -715,9 +717,19 @@ export function MobileGrimoire() {
     saveDefaultNoteType(vault.location, nextType);
   };
 
-  const submitNewType = async () => {
-    const path = parseTypePath(typeDraft ?? "");
+  const startTypeCreation = (parentPath: string[] = []) => {
+    setTypeParentPath(parentPath);
+    setTypeDraft("");
+  };
+
+  const closeTypeCreation = () => {
     setTypeDraft(null);
+    setTypeParentPath([]);
+  };
+
+  const submitNewType = async (name: string) => {
+    const path = [...typeParentPath, name].slice(0, MAX_TYPE_DEPTH);
+    closeTypeCreation();
     if (!path.length) return;
     const existingKeys = new Set(flattenTypeKeys(typeTree));
     const created = await createType(path);
@@ -896,7 +908,7 @@ export function MobileGrimoire() {
           </div>
         )}
         {vault.status === "ready" && !selectedNote && <BottomSearch query={query} onQueryChange={setQuery} onCreate={scope.kind === "trash" ? undefined : () => void createForScope()} createLabel={scope.kind === "external" ? "Open an external note" : scope.kind === "files" ? "Add a linked file" : "Create a new note"} />}
-        {libraryOpen && <LibraryDrawer counts={libraryCounts} typeTree={typeTree} typeIcons={vault.typeIcons} onClose={() => setLibraryOpen(false)} onSelect={selectScope} onCreateType={() => setTypeDraft("")} onOpenTypeActions={setTypeActionTarget} />}
+        {libraryOpen && <LibraryDrawer counts={libraryCounts} typeTree={typeTree} typeIcons={vault.typeIcons} onClose={() => setLibraryOpen(false)} onSelect={selectScope} onCreateType={() => startTypeCreation()} onOpenTypeActions={setTypeActionTarget} />}
         {libraryOpen && typeActionTarget && (
           <TypeActionSheet
             target={typeActionTarget}
@@ -904,23 +916,19 @@ export function MobileGrimoire() {
             onMoveUp={() => moveType(typeActionTarget, "up")}
             onMoveDown={() => moveType(typeActionTarget, "down")}
             onChangeIcon={() => setIconTarget(typeActionTarget.node)}
-            onAddSubtype={() => setTypeDraft(`${typeKey(typeActionTarget.node.path)}/`)}
+            onAddSubtype={() => startTypeCreation(typeActionTarget.node.path)}
             onRename={() => startRename(typeActionTarget.node)}
             onDelete={() => setDeleteTarget(typeActionTarget.node)}
           />
         )}
-        <Dialog open={typeDraft !== null} onOpenChange={(open) => { if (!open) setTypeDraft(null); }}>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Add type</DialogTitle></DialogHeader>
-            <form onSubmit={(event) => { event.preventDefault(); void submitNewType(); }}>
-              <Input autoFocus value={typeDraft ?? ""} onChange={(event) => setTypeDraft(event.target.value)} placeholder="type (e.g. work/projects)" />
-              <DialogFooter className="mt-4">
-                <Button type="button" variant="outline" onClick={() => setTypeDraft(null)}>Cancel</Button>
-                <Button type="submit">Add</Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+        <TypeCreationDialog
+          open={typeDraft !== null}
+          parentPath={typeParentPath}
+          draft={typeDraft ?? ""}
+          onDraftChange={setTypeDraft}
+          onOpenChange={(open) => { if (!open) closeTypeCreation(); }}
+          onSubmit={(name) => void submitNewType(name)}
+        />
         <EmojiPickerDialog
           open={iconTarget !== null}
           typeName={iconTarget?.name ?? ""}
