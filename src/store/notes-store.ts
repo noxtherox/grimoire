@@ -60,6 +60,9 @@ import { DesktopVault } from "@/lib/vault/desktop";
 import { MobileFolderVault, MobileVault } from "@/lib/vault/mobile";
 import {
   clearMobileVaultFolder,
+  openMobileFile,
+  pickMobileExternalNotes,
+  pickMobileFiles,
   pickMobileVaultFolder,
   restoreMobileVaultFolder,
 } from "@/lib/mobile-vault-picker";
@@ -459,7 +462,7 @@ async function loadVault(nextBackend: VaultBackend) {
       };
     });
     let externalNotes =
-      nextBackend.kind === "desktop" ? await loadExternalNotes() : [];
+      nextBackend.kind === "browser" ? [] : await loadExternalNotes();
     if (externalNotes.length) {
       const vaultPaths = new Set(
         await Promise.all(
@@ -1281,14 +1284,18 @@ if (typeof window !== "undefined" && !isTauri()) {
 /** Opens one or more markdown files without assigning them a vault type. */
 export async function openExternalNotes(): Promise<string[]> {
   if (!isTauri()) return [];
+  if (isIOSRuntime()) {
+    const paths = (await pickMobileExternalNotes()).map((file) => file.path);
+    return openExternalPaths(paths);
+  }
   const picked = await openDialog({
     multiple: true,
     title: "Open external markdown notes",
     filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
   });
   if (!picked) return [];
-  const paths = typeof picked === "string" ? [picked] : picked;
-  return openExternalPaths(paths);
+  const desktopPaths = typeof picked === "string" ? [picked] : picked;
+  return openExternalPaths(desktopPaths);
 }
 
 async function openExternalPaths(paths: string[]): Promise<string[]> {
@@ -1441,6 +1448,17 @@ export type AttachFileResult =
 function resolvedHub(note: Note): ResolvedFileHub | null {
   const reference = getFileHubReference(note);
   if (!reference) return null;
+  if (reference.kind === "vault" && reference.path && backend?.absolutePath) {
+    const absolutePath = backend.absolutePath(reference.path);
+    if (absolutePath) {
+      return {
+        reference,
+        absolutePath,
+        location: null,
+        missingMapping: false,
+      };
+    }
+  }
   return resolveFileHubReference(
     reference,
     state.location,
@@ -1476,6 +1494,9 @@ export async function getFileHubStatus(id: string): Promise<FileHubStatus | null
 
 export async function chooseDocumentFile(): Promise<string | null> {
   if (!isTauri()) return null;
+  if (isIOSRuntime()) {
+    return (await pickMobileFiles())[0]?.path ?? null;
+  }
   const picked = await openDialog({
     title: "Choose a file",
   });
@@ -1683,7 +1704,8 @@ export async function openFileHub(id: string): Promise<void> {
   const path = note ? resolvedHub(note)?.absolutePath : null;
   if (!path) return;
   try {
-    await openPath(path);
+    if (isIOSRuntime()) await openMobileFile(path);
+    else await openPath(path);
   } catch (error) {
     reportError("open document", error);
   }

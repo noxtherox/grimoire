@@ -127,6 +127,22 @@
     color: rgb(var(--grim-text));
   }
 
+  html.mobile-grimoire-page,
+  html.mobile-grimoire-page body,
+  html.mobile-grimoire-page #root {
+    background-color: #1c1d1e;
+    color-scheme: dark;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  html.mobile-grimoire-page body {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+  }
+
   .mobile-grimoire-dark {
     --grim-accent: 239 104 96;
     --grim-link: 124 175 255;
@@ -150,6 +166,10 @@
   .mobile-note-editor .cm-content {
     width: 100%;
     max-width: none;
+  }
+
+  .mobile-note-editor .cm-editor {
+    font-size: 16px;
   }
 
   .mobile-note-editor .cm-content {

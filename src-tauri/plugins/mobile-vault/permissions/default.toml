@@ -4,4 +4,7 @@ permissions = [
   "allow-pick-vault-folder",
   "allow-restore-vault-folder",
   "allow-clear-vault-folder",
+  "allow-pick-external-notes",
+  "allow-pick-files",
+  "allow-open-file",
 ]

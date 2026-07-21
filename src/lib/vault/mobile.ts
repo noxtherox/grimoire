@@ -87,6 +87,12 @@ abstract class MobileFilesystemVault implements VaultBackend {
   abstract readonly location: string;
 
   protected abstract target(path: string): DiskPath;
+
+  absolutePath(path: string): string | null {
+    const target = this.target(path);
+    return target instanceof URL ? decodeURIComponent(target.pathname) : null;
+  }
+
   protected baseDirectory(): BaseDirectory | undefined {
     return undefined;
   }

@@ -1,3 +1,6 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+
 const INTERFACE_ZOOM_STORAGE_KEY = "grimoire.interfaceZoom";
 
 export const INTERFACE_ZOOM_OPTIONS = [80, 90, 100, 110, 125, 150] as const;
@@ -18,9 +21,26 @@ export function loadInterfaceZoom(): InterfaceZoom {
   }
 }
 
-/** Scales text, controls, icons, and layout together. */
+function applyReflowingBrowserZoom(zoom: InterfaceZoom): void {
+  document.documentElement.style.fontSize = `${zoom}%`;
+}
+
+/** Scales the whole interface while keeping it within the visible viewport. */
 export function applyInterfaceZoom(zoom: InterfaceZoom): void {
-  document.documentElement.style.setProperty("zoom", String(zoom / 100));
+  // Clear the old CSS zoom implementation. CSS zoom enlarged the existing
+  // canvas, which could push fixed and viewport-sized UI outside the window.
+  document.documentElement.style.removeProperty("zoom");
+  document.documentElement.style.removeProperty("font-size");
+
+  if (isTauri()) {
+    void getCurrentWebview()
+      .setZoom(zoom / 100)
+      .catch(() => applyReflowingBrowserZoom(zoom));
+    return;
+  }
+
+  // Keep the browser preview useful without scaling the viewport itself.
+  applyReflowingBrowserZoom(zoom);
 }
 
 /** Saves and immediately applies the app-wide interface zoom. */

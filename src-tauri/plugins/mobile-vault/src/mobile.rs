@@ -42,4 +42,22 @@ impl<R: Runtime> MobileVault<R> {
             .run_mobile_plugin("clearVaultFolder", EmptyRequest::default())
             .map_err(Into::into)
     }
+
+    pub fn pick_external_notes(&self) -> crate::Result<PickedFilesResponse> {
+        self.0
+            .run_mobile_plugin("pickExternalNotes", EmptyRequest::default())
+            .map_err(Into::into)
+    }
+
+    pub fn pick_files(&self) -> crate::Result<PickedFilesResponse> {
+        self.0
+            .run_mobile_plugin("pickFiles", EmptyRequest::default())
+            .map_err(Into::into)
+    }
+
+    pub fn open_file(&self, request: OpenFileRequest) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("openFile", request)
+            .map_err(Into::into)
+    }
 }

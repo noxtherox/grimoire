@@ -15,3 +15,22 @@ pub struct VaultLocation {
 pub struct VaultLocationResponse {
     pub vault: Option<VaultLocation>,
 }
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedFile {
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedFilesResponse {
+    pub files: Vec<PickedFile>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFileRequest {
+    pub path: String,
+}

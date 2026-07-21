@@ -1,39 +1,92 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
+  ArrowDown,
+  ArrowUp,
   ChevronRight,
   Cloud,
+  ExternalLink,
+  File,
+  FilePlus2,
   FileText,
   Folder,
   FolderSearch,
   Loader2,
+  Link2,
   Menu,
+  MoreHorizontal,
+  Pencil,
   Plus,
   Search,
   Settings,
+  Smile,
   Smartphone,
+  FolderPlus,
   Trash2,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
+import { PropertiesSection } from "@/components/notes/PropertiesSection";
+import { EmojiPickerDialog } from "@/components/notes/EmojiPickerDialog";
+import { TypeIcon } from "@/components/notes/TypeIcon";
 import { cn } from "@/lib/utils";
 import { noteBody } from "@/lib/frontmatter";
 import {
-  isArchived,
-  isTrashed,
+  DEFAULT_TYPE,
+  MAX_TYPE_DEPTH,
+  buildTypeTree,
+  isExternalNote,
   noteSnippet,
   noteTitle,
   noteTypePath,
+  parseTypePath,
+  reorderTypeTree,
+  typeKey,
   type Note,
+  type TypeNode,
 } from "@/lib/note-utils";
+import { getFileHubReference } from "@/lib/file-hubs";
+import { filterNotes, type NoteFilter } from "@/lib/filters";
 import {
+  loadDefaultNoteType,
+  loadNoteTypeOrder,
+  saveDefaultNoteType,
+  saveNoteTypeOrder,
+} from "@/lib/note-preferences";
+import { isEmojiValue } from "@/lib/type-icons";
+import {
+  createFileNote,
   createNote,
   createMobileVaultAtLocation,
   createMobileVaultOnDevice,
   initStore,
   locateMobileVault,
+  openExternalNotes,
+  openFileHub,
+  createType,
+  deleteType,
+  emptyTrash,
+  renameType,
+  setTypeIcon,
   updateNoteBody,
   useVault,
 } from "@/store/notes-store";
@@ -44,22 +97,12 @@ interface MobileNote {
   preview: string;
   body: string;
   type: string;
-  emoji: string;
+  kind: "note" | "external" | "file";
+  emoji: string | null;
+  fileName?: string;
   updated: string;
   pinned?: boolean;
 }
-
-const TYPES = [
-  { name: "Ideas", emoji: "💡", count: 18, color: "bg-amber-100 dark:bg-amber-400/15" },
-  { name: "Books", emoji: "📚", count: 11, color: "bg-blue-100 dark:bg-blue-400/15" },
-  { name: "Journal", emoji: "✍️", count: 32, color: "bg-rose-100 dark:bg-rose-400/15" },
-  { name: "Home", emoji: "🌿", count: 9, color: "bg-emerald-100 dark:bg-emerald-400/15" },
-  { name: "Projects", emoji: "📂", count: 14, color: "bg-violet-100 dark:bg-violet-400/15" },
-];
-
-const TYPE_EMOJI: Record<string, string> = Object.fromEntries(
-  TYPES.map((type) => [type.name.toLowerCase(), type.emoji]),
-);
 
 function editorBody(note: Note): string {
   const lines = noteBody(note.content).split("\n");
@@ -80,16 +123,23 @@ function formatUpdated(updatedAt: string): string {
   return new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" }).format(new Date(updatedAt));
 }
 
-function presentNote(note: Note): MobileNote {
-  const type = noteTypePath(note).join(" / ") || "Inbox";
-  const rootType = noteTypePath(note)[0]?.toLowerCase() ?? "inbox";
+function presentNote(note: Note, typeIcons: Record<string, string> = {}): MobileNote {
+  const file = getFileHubReference(note);
+  const typePath = noteTypePath(note);
+  const typeKey = typePath.join("/");
+  const configuredIcon = typeIcons[typeKey] ?? typeIcons[typePath[0] ?? ""];
+  const type = isExternalNote(note)
+    ? "External Note"
+    : typePath.join(" / ") || "Inbox";
   return {
     id: note.id,
     title: noteTitle(note),
-    preview: noteSnippet(note) || "Empty note",
+    preview: file?.name ?? (noteSnippet(note) || "Empty note"),
     body: editorBody(note),
     type,
-    emoji: TYPE_EMOJI[rootType] ?? "📄",
+    kind: file ? "file" : isExternalNote(note) ? "external" : "note",
+    emoji: configuredIcon && isEmojiValue(configuredIcon) ? configuredIcon : null,
+    fileName: file?.name,
     updated: formatUpdated(note.updatedAt),
     pinned: note.pinned,
   };
@@ -121,6 +171,15 @@ interface NoteCardProps {
 }
 
 function NoteCard({ note, onOpen }: NoteCardProps) {
+  const icon = note.emoji ? (
+    <span className="text-[17px]">{note.emoji}</span>
+  ) : note.kind === "external" ? (
+    <ExternalLink className="h-[18px] w-[18px]" />
+  ) : note.kind === "file" ? (
+    <File className="h-[18px] w-[18px]" />
+  ) : (
+    <FileText className="h-[18px] w-[18px]" />
+  );
   return (
     <button
       type="button"
@@ -128,7 +187,7 @@ function NoteCard({ note, onOpen }: NoteCardProps) {
       className="group w-full border-b border-white/[0.065] px-1 py-4 text-left transition last:border-b-0 active:bg-white/[0.035]"
     >
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] bg-white/[0.07] text-[17px]" aria-hidden="true">{note.emoji}</span>
+        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] bg-white/[0.07] text-[#ef6b62]" aria-hidden="true">{icon}</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h3 className="truncate text-[16px] font-semibold tracking-[-0.015em] text-[#f2efea]">{note.title}</h3>
@@ -147,10 +206,11 @@ function NoteCard({ note, onOpen }: NoteCardProps) {
 interface BottomSearchProps {
   query: string;
   onQueryChange: (query: string) => void;
-  onCreate: () => void;
+  onCreate?: () => void;
+  createLabel?: string;
 }
 
-function BottomSearch({ query, onQueryChange, onCreate }: BottomSearchProps) {
+function BottomSearch({ query, onQueryChange, onCreate, createLabel = "Create a new note" }: BottomSearchProps) {
   return (
     <div className="mobile-bottom-search pointer-events-none absolute inset-x-0 bottom-0 z-30 flex items-center gap-2.5 bg-gradient-to-t from-[#1c1d1e] via-[#1c1d1e]/95 to-transparent px-5 pb-7 pt-8">
       <label className="pointer-events-auto relative min-w-0 flex-1">
@@ -168,80 +228,183 @@ function BottomSearch({ query, onQueryChange, onCreate }: BottomSearchProps) {
           </button>
         )}
       </label>
-      <button type="button" onClick={onCreate} className="pointer-events-auto flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full bg-[#df5149] text-white shadow-[0_8px_24px_rgba(223,81,73,0.34)] transition active:scale-95" aria-label="Create a new note">
+      {onCreate && <button type="button" onClick={onCreate} className="pointer-events-auto flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full bg-[#df5149] text-white shadow-[0_8px_24px_rgba(223,81,73,0.34)] transition active:scale-95" aria-label={createLabel}>
         <Plus className="h-7 w-7" strokeWidth={2} />
-      </button>
+      </button>}
     </div>
   );
 }
 
 interface LibraryDrawerProps {
-  notes: MobileNote[];
+  counts: { all: number; external: number; files: number; trash: number };
+  typeTree: TypeNode[];
+  typeIcons: Record<string, string>;
   onClose: () => void;
-  onSelectAll: () => void;
-  onSelectType: (type: string) => void;
+  onSelect: (scope: NoteFilter) => void;
+  onCreateType: () => void;
+  onOpenTypeActions: (target: TypeActionTarget) => void;
 }
 
-function LibraryDrawer({ notes, onClose, onSelectAll, onSelectType }: LibraryDrawerProps) {
+interface TypeActionTarget {
+  node: TypeNode;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  previousKey: string | null;
+  nextKey: string | null;
+}
+
+function flattenTypes(nodes: TypeNode[], depth = 0): Array<TypeActionTarget & { depth: number }> {
+  return nodes.flatMap((node, index) => [
+    {
+      node,
+      depth,
+      canMoveUp: index > 0,
+      canMoveDown: index < nodes.length - 1,
+      previousKey: index > 0 ? typeKey(nodes[index - 1].path) : null,
+      nextKey: index < nodes.length - 1 ? typeKey(nodes[index + 1].path) : null,
+    },
+    ...flattenTypes(node.children, depth + 1),
+  ]);
+}
+
+function flattenTypeKeys(nodes: TypeNode[]): string[] {
+  return nodes.flatMap((node) => [
+    typeKey(node.path),
+    ...flattenTypeKeys(node.children),
+  ]);
+}
+
+function LibraryDrawer({ counts, typeTree, typeIcons, onClose, onSelect, onCreateType, onOpenTypeActions }: LibraryDrawerProps) {
+  const scopeRow = (
+    label: string,
+    count: number,
+    icon: ReactNode,
+    scope: NoteFilter,
+    iconClass = "bg-[#df5149]",
+  ) => (
+    <button type="button" onClick={() => onSelect(scope)} className="flex min-h-[62px] w-full items-center gap-3 rounded-[13px] border-b border-white/[0.08] px-4 py-3 text-left last:border-b-0 active:bg-white/[0.05]">
+      <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] text-white", iconClass)}>{icon}</span>
+      <span className="flex-1 text-[16px] font-medium">{label}</span>
+      <span className="text-sm text-[#98989f]">{count}</span><ChevronRight className="h-4 w-4 text-[#636366]" />
+    </button>
+  );
   return (
-    <div className="absolute inset-0 z-50 bg-black/55 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Library">
-      <aside className="flex h-full w-[86%] flex-col rounded-r-[28px] bg-[#1c1c1e] px-4 pb-8 pt-12 shadow-2xl">
-        <header className="mb-5 flex items-center justify-between px-1">
-          <h2 className="text-[30px] font-bold tracking-[-0.04em]">Library</h2>
-          <Button variant="ghost" size="icon" onClick={onClose} className="h-9 w-9 rounded-full bg-white/[0.08] text-[#f5f5f7] hover:bg-white/[0.12]" aria-label="Close library"><X className="h-5 w-5" /></Button>
-        </header>
-        <div className="overflow-hidden rounded-[14px] bg-[#2c2c2e]">
-          <button type="button" onClick={onSelectAll} className="flex w-full items-center gap-3 border-b border-white/[0.08] px-4 py-3.5 text-left active:bg-white/[0.04]">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#df5149] text-white"><FileText className="h-[18px] w-[18px]" /></span>
-            <span className="flex-1 text-[16px] font-medium">All Notes</span>
-            <span className="text-sm text-[#98989f]">{notes.length}</span><ChevronRight className="h-4 w-4 text-[#636366]" />
-          </button>
-          <button type="button" className="flex w-full items-center gap-3 px-4 py-3.5 text-left active:bg-white/[0.04]">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#636366] text-white"><Trash2 className="h-[18px] w-[18px]" /></span>
-            <span className="flex-1 text-[16px] font-medium">Recently Deleted</span>
-            <span className="text-sm text-[#98989f]">0</span><ChevronRight className="h-4 w-4 text-[#636366]" />
-          </button>
+    <div className="absolute inset-0 z-40 flex min-h-0 flex-col bg-[#1c1c1e]" role="dialog" aria-modal="true" aria-label="Grimoire navigation">
+      <header className="z-10 flex shrink-0 items-center justify-between border-b border-white/[0.06] bg-[#1c1c1e]/95 px-5 pb-4 pt-[max(2.75rem,env(safe-area-inset-top))] backdrop-blur-xl">
+        <h2 className="text-[30px] font-bold tracking-[-0.04em]">Grimoire</h2>
+        <Button variant="ghost" size="icon" onClick={onClose} className="h-10 w-10 rounded-full bg-white/[0.08] text-[#f5f5f7] hover:bg-white/[0.12]" aria-label="Close Grimoire navigation"><X className="h-5 w-5" /></Button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[calc(env(safe-area-inset-bottom)+2rem)] pt-5 touch-pan-y" style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}>
+        <div className="rounded-[18px] bg-[#2c2c2e] p-1">
+          {scopeRow("All Notes", counts.all, <FileText className="h-[18px] w-[18px]" />, { kind: "all" })}
+          {scopeRow("External Notes", counts.external, <ExternalLink className="h-[18px] w-[18px]" />, { kind: "external" })}
+          {scopeRow("Files", counts.files, <File className="h-[18px] w-[18px]" />, { kind: "files" })}
         </div>
-        <p className="mb-2 mt-7 px-1 text-[13px] font-semibold text-[#98989f]">Folders</p>
-        <div className="overflow-hidden rounded-[14px] bg-[#2c2c2e]">
-          {TYPES.map((type) => {
-            const noteCount = notes.filter((note) => note.type === type.name).length;
-            return (
-              <button type="button" key={type.name} onClick={() => onSelectType(type.name)} className="flex w-full items-center gap-3 border-b border-white/[0.08] px-4 py-3 text-left last:border-b-0 active:bg-white/[0.04]">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#df5149] text-white"><Folder className="h-[18px] w-[18px]" /></span>
-                <span className="flex-1 text-[16px] font-medium">{type.name}</span><span className="text-sm text-[#98989f]">{noteCount}</span><ChevronRight className="h-4 w-4 text-[#636366]" />
+        <div className="mb-2 mt-7 flex items-center justify-between px-1">
+          <p className="text-[13px] font-semibold text-[#98989f]">Types</p>
+          <button type="button" onClick={onCreateType} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.07] text-[#d4d4d8] active:bg-white/[0.12]" aria-label="Add type"><Plus className="h-4 w-4" /></button>
+        </div>
+        {typeTree.length > 0 ? <div className="rounded-[18px] bg-[#2c2c2e] p-1">
+          {flattenTypes(typeTree).map((target) => (
+            <div key={typeKey(target.node.path)} className="flex min-h-[62px] items-center border-b border-white/[0.08] last:border-b-0" style={{ paddingLeft: `${12 + target.depth * 18}px` }}>
+              <button type="button" onClick={() => onSelect({ kind: "type", path: target.node.path })} className="flex min-w-0 flex-1 items-center gap-3 self-stretch rounded-[13px] text-left active:bg-white/[0.05]">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] bg-[#df5149] text-white"><TypeIcon icon={typeIcons[typeKey(target.node.path)]} size={20} /></span>
+                <span className="min-w-0 flex-1 truncate text-[16px] font-medium">{target.node.name}</span>
               </button>
-            );
-          })}
+              <button type="button" onClick={() => onOpenTypeActions(target)} className="mr-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[#8e8e93] active:bg-white/[0.08]" aria-label={`Actions for ${target.node.name}`}><MoreHorizontal className="h-5 w-5" /></button>
+            </div>
+          ))}
+        </div> : <p className="rounded-[14px] bg-[#2c2c2e] px-4 py-4 text-sm text-[#98989f]">No note types yet.</p>}
+        <div className="mt-7 rounded-[18px] bg-[#2c2c2e] p-1">
+          {scopeRow("Recently Deleted", counts.trash, <Trash2 className="h-[18px] w-[18px]" />, { kind: "trash" }, "bg-[#636366]")}
         </div>
-      </aside>
-      <button type="button" onClick={onClose} className="absolute inset-y-0 right-0 w-[14%]" aria-label="Close library" />
+      </div>
+    </div>
+  );
+}
+
+interface TypeActionSheetProps {
+  target: TypeActionTarget;
+  onClose: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onChangeIcon: () => void;
+  onAddSubtype: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}
+
+function TypeActionSheet({ target, onClose, onMoveUp, onMoveDown, onChangeIcon, onAddSubtype, onRename, onDelete }: TypeActionSheetProps) {
+  const action = (
+    label: string,
+    icon: ReactNode,
+    run: () => void,
+    disabled = false,
+    destructive = false,
+  ) => (
+    <button type="button" disabled={disabled} onClick={() => { onClose(); run(); }} className={cn("flex min-h-[54px] w-full items-center gap-3 border-b border-white/[0.08] px-4 text-left text-[16px] last:border-b-0 active:bg-white/[0.05] disabled:opacity-35", destructive && "text-[#ff6961]")}>
+      <span className="flex h-8 w-8 items-center justify-center">{icon}</span><span>{label}</span>
+    </button>
+  );
+  return (
+    <div className="absolute inset-0 z-[70] flex items-end bg-black/55" role="dialog" aria-modal="true" aria-label={`Actions for ${target.node.name}`} onClick={onClose}>
+      <section className="w-full rounded-t-[26px] bg-[#242426] px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="mx-auto h-1 w-10 rounded-full bg-white/20" />
+        <h3 className="px-2 pb-3 pt-4 text-center text-[15px] font-semibold text-[#a6a6ab]">{target.node.name}</h3>
+        <div className="overflow-hidden rounded-[16px] bg-[#2c2c2e]">
+          {action("Move up", <ArrowUp className="h-5 w-5" />, onMoveUp, !target.canMoveUp)}
+          {action("Move down", <ArrowDown className="h-5 w-5" />, onMoveDown, !target.canMoveDown)}
+          {action("Change icon", <Smile className="h-5 w-5" />, onChangeIcon)}
+          {action("Add subtype", <FolderPlus className="h-5 w-5" />, onAddSubtype, target.node.path.length >= MAX_TYPE_DEPTH)}
+          {action("Rename type", <Pencil className="h-5 w-5" />, onRename)}
+          {action("Delete type", <Trash2 className="h-5 w-5" />, onDelete, false, true)}
+        </div>
+        <button type="button" onClick={onClose} className="mt-3 h-[52px] w-full rounded-[16px] bg-[#2c2c2e] text-[16px] font-semibold active:bg-[#363638]">Cancel</button>
+      </section>
     </div>
   );
 }
 
 interface NoteViewProps {
-  note: MobileNote;
+  note: Note;
+  allNotes: Note[];
   onBack: () => void;
   onBodyChange: (body: string) => void;
+  onOpenNote: (id: string) => void;
+  onOpenFile: (id: string) => void;
 }
 
-function NoteView({ note, onBack, onBodyChange }: NoteViewProps) {
-  const [draft, setDraft] = useState(note.body);
+function NoteView({
+  note,
+  allNotes,
+  onBack,
+  onBodyChange,
+  onOpenNote,
+  onOpenFile,
+}: NoteViewProps) {
+  const presentedNote = presentNote(note);
+  const file = getFileHubReference(note);
+  const [draft, setDraft] = useState(presentedNote.body);
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#1c1d1e]">
-      <header className="flex h-12 shrink-0 items-center justify-between px-3">
-        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full bg-[#f0efed] hover:bg-[#e9e7e3] dark:bg-white/[0.08] dark:text-[#f5f3ef] dark:hover:bg-white/[0.12]" onClick={onBack} aria-label="Back to notes"><ArrowLeft className="h-5 w-5" /></Button>
-        <span className="text-xs font-medium text-[#99958f] dark:text-[#8b8883]">{note.type}</span>
-        <span className="h-9 w-9" aria-hidden="true" />
+    <div className="relative flex min-h-0 flex-1 flex-col bg-[#1c1d1e]">
+      <header className="relative z-20 flex h-12 shrink-0 items-center justify-between px-2">
+        <Button variant="ghost" size="icon" className="h-11 w-11 touch-manipulation rounded-full bg-[#f0efed] hover:bg-[#e9e7e3] dark:bg-white/[0.08] dark:text-[#f5f3ef] dark:hover:bg-white/[0.12]" onClick={onBack} aria-label="Back to notes"><ArrowLeft className="h-5 w-5" /></Button>
+        <span className="text-xs font-medium text-[#99958f] dark:text-[#8b8883]">{presentedNote.type}</span>
+        <Button variant="ghost" size="icon" className="h-11 w-11 touch-manipulation rounded-full bg-[#f0efed] hover:bg-[#e9e7e3] dark:bg-white/[0.08] dark:text-[#f5f3ef] dark:hover:bg-white/[0.12]" onClick={() => setPropertiesOpen(true)} aria-label="View properties"><Link2 className="h-[18px] w-[18px]" /></Button>
       </header>
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pt-5">
-        <div className="mb-4 flex items-center gap-2 text-xs font-medium text-[#77736f]"><span className="flex items-center gap-1 text-[#df5149]"><Folder className="h-3.5 w-3.5" />{note.type}</span><span>·</span><span>Edited {note.updated} ago</span></div>
-        <h1 className="text-[36px] font-bold leading-[1.06] tracking-[-0.045em] text-[#24221f] dark:text-[#f5f3ef]">{note.title}</h1>
+        <div className="mb-4 flex items-center gap-2 text-xs font-medium text-[#77736f]"><span className="flex items-center gap-1 text-[#df5149]">{presentedNote.kind === "external" ? <ExternalLink className="h-3.5 w-3.5" /> : presentedNote.kind === "file" ? <File className="h-3.5 w-3.5" /> : <Folder className="h-3.5 w-3.5" />}{presentedNote.type}</span><span>·</span><span>Edited {presentedNote.updated} ago</span></div>
+        <h1 className="text-[36px] font-bold leading-[1.06] tracking-[-0.045em] text-[#24221f] dark:text-[#f5f3ef]">{presentedNote.title}</h1>
+        {file && <button type="button" onClick={() => onOpenFile(note.id)} className="mt-5 flex items-center gap-3 rounded-[14px] bg-[#292a2b] px-4 py-3.5 text-left active:bg-[#333436]">
+          <span className="flex h-10 w-10 items-center justify-center rounded-[11px] bg-[#df5149] text-white"><File className="h-5 w-5" /></span>
+          <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{file.name}</span><span className="mt-0.5 block text-xs text-[#8e8e93]">Open with an app on this device</span></span>
+          <ExternalLink className="h-4 w-4 text-[#77777d]" />
+        </button>}
         <div className="mobile-note-editor -mx-6 mt-2 min-h-0 flex-1 overflow-hidden [&_[role=toolbar]]:hidden [&_.cm-content]:!px-6 [&_.cm-content]:!pb-28 [&_.cm-content]:!pt-3 [&_.cm-scroller]:overscroll-contain">
           <MarkdownEditor
-            noteId={`mobile-${note.id}`}
+            noteId={`mobile-${presentedNote.id}`}
             initialContent={draft}
             getLinkableTitles={() => []}
             isTitleResolved={() => false}
@@ -250,11 +413,30 @@ function NoteView({ note, onBack, onBodyChange }: NoteViewProps) {
               onBodyChange(body);
             }}
             onFollowLink={() => undefined}
+            autoFocus={false}
             placeholderText="Start writing…"
             firstLineIsTitle={false}
           />
         </div>
       </main>
+      {propertiesOpen && (
+        <div className="absolute inset-0 z-40 flex flex-col bg-[#1c1d1e]" role="dialog" aria-modal="true" aria-label="Note properties">
+          <header className="flex h-12 shrink-0 items-center justify-end border-b border-white/[0.07] px-3">
+            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full bg-white/[0.08] text-[#f5f3ef] hover:bg-white/[0.12]" onClick={() => setPropertiesOpen(false)} aria-label="Close properties"><X className="h-5 w-5" /></Button>
+          </header>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <PropertiesSection
+              note={note}
+              allNotes={allNotes}
+              onOpenNote={(id) => {
+                setPropertiesOpen(false);
+                onOpenNote(id);
+              }}
+              expanded
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -262,9 +444,10 @@ function NoteView({ note, onBack, onBodyChange }: NoteViewProps) {
 interface ComposerProps {
   onClose: () => void;
   onSave: (title: string, body: string) => void;
+  typePath: string[];
 }
 
-function Composer({ onClose, onSave }: ComposerProps) {
+function Composer({ onClose, onSave, typePath }: ComposerProps) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
 
@@ -293,7 +476,7 @@ function Composer({ onClose, onSave }: ComposerProps) {
             />
           </div>
         </div>
-        <div className="flex items-center gap-2 border-t border-black/[0.06] px-5 pb-7 pt-3 text-xs text-[#77736d] dark:border-white/[0.06] dark:text-[#aaa6a0]"><Folder className="h-4 w-4 text-[#df5149]" /><span>Note Type: Ideas</span><ChevronRight className="ml-auto h-4 w-4" /></div>
+        <div className="flex items-center gap-2 border-t border-black/[0.06] px-5 pb-7 pt-3 text-xs text-[#77736d] dark:border-white/[0.06] dark:text-[#aaa6a0]"><Folder className="h-4 w-4 text-[#df5149]" /><span>Note Type: {typePath.join(" / ")}</span></div>
       </div>
     </div>
   );
@@ -410,29 +593,69 @@ export function MobileGrimoire() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
   const [vaultSetupOpen, setVaultSetupOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<NoteFilter>({ kind: "all" });
+  const [typeOrder, setTypeOrder] = useState<string[]>(() => loadNoteTypeOrder(null));
+  const [defaultNoteType, setDefaultNoteTypeState] = useState<string[]>(() => loadDefaultNoteType(null));
+  const [typeActionTarget, setTypeActionTarget] = useState<TypeActionTarget | null>(null);
+  const [typeDraft, setTypeDraft] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<TypeNode | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [iconTarget, setIconTarget] = useState<TypeNode | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TypeNode | null>(null);
+
+  useEffect(() => {
+    document.documentElement.classList.add("mobile-grimoire-page");
+    return () => document.documentElement.classList.remove("mobile-grimoire-page");
+  }, []);
+
   useEffect(() => {
     initStore();
   }, []);
 
-  const notes = useMemo(
-    () =>
-      vault.notes
-        .filter((note) => !isTrashed(note) && !isArchived(note))
-        .map(presentNote),
-    [vault.notes],
+  useEffect(() => {
+    setTypeOrder(loadNoteTypeOrder(vault.location));
+    setDefaultNoteTypeState(loadDefaultNoteType(vault.location));
+  }, [vault.location]);
+
+  const selectedSourceNote = vault.notes.find((note) => note.id === selectedNoteId) ?? null;
+  const selectedNote = selectedSourceNote
+    ? presentNote(selectedSourceNote, vault.typeIcons)
+    : null;
+  const typeTree = useMemo(
+    () => buildTypeTree(vault.notes, vault.extraTypes, typeOrder),
+    [typeOrder, vault.extraTypes, vault.notes],
   );
-  const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
+  const creationType = useMemo(
+    () => scope.kind === "type" ? scope.path : defaultNoteType,
+    [defaultNoteType, scope],
+  );
+  const scopeTitle = scope.kind === "all"
+    ? "All Notes"
+    : scope.kind === "external"
+      ? "External Notes"
+      : scope.kind === "files"
+        ? "Files"
+        : scope.kind === "trash"
+          ? "Recently Deleted"
+          : scope.path.join(" / ");
   const filteredNotes = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return notes;
-    return notes.filter((note) => `${note.title} ${note.preview} ${note.type}`.toLowerCase().includes(term));
-  }, [notes, query]);
+    return filterNotes(vault.notes, scope, query).map((note) =>
+      presentNote(note, vault.typeIcons),
+    );
+  }, [query, scope, vault.notes, vault.typeIcons]);
+  const libraryCounts = useMemo(() => ({
+    all: filterNotes(vault.notes, { kind: "all" }, "").length,
+    external: filterNotes(vault.notes, { kind: "external" }, "").length,
+    files: filterNotes(vault.notes, { kind: "files" }, "").length,
+    trash: filterNotes(vault.notes, { kind: "trash" }, "").length,
+  }), [vault.notes]);
 
   const saveQuickNote = async (title: string, body: string) => {
     const content = `# ${title}\n\n${body.trim()}`;
-    const note = await createNote(["Ideas"], content);
+    const note = await createNote(creationType, content);
     if (!note) return;
     setComposerOpen(false);
     setSelectedNoteId(note.id);
@@ -444,7 +667,130 @@ export function MobileGrimoire() {
   const resetNavigation = () => {
     setSelectedNoteId(null);
     setQuery("");
+    setScope({ kind: "all" });
     setLibraryOpen(false);
+  };
+
+  const selectScope = (nextScope: NoteFilter) => {
+    setScope(nextScope);
+    setSelectedNoteId(null);
+    setQuery("");
+    setLibraryOpen(false);
+  };
+
+  const updateTypeOrder = (nextOrder: string[]) => {
+    setTypeOrder(nextOrder);
+    saveNoteTypeOrder(vault.location, nextOrder);
+  };
+
+  const updateDefaultNoteType = (nextType: string[]) => {
+    setDefaultNoteTypeState(nextType);
+    saveDefaultNoteType(vault.location, nextType);
+  };
+
+  const submitNewType = async () => {
+    const path = parseTypePath(typeDraft ?? "");
+    setTypeDraft(null);
+    if (!path.length) return;
+    const existingKeys = new Set(flattenTypeKeys(typeTree));
+    const created = await createType(path);
+    if (!created) return;
+    const newKeys: string[] = [];
+    for (let depth = 1; depth <= path.length; depth += 1) {
+      const key = typeKey(path.slice(0, depth));
+      if (!existingKeys.has(key)) newKeys.push(key);
+    }
+    if (newKeys.length) {
+      const currentKeys = new Set(typeOrder);
+      const baseline = [
+        ...typeOrder,
+        ...flattenTypeKeys(typeTree).filter((key) => !currentKeys.has(key)),
+      ].filter((key) => !newKeys.includes(key));
+      updateTypeOrder([...baseline, ...newKeys]);
+    }
+    setScope({ kind: "type", path });
+  };
+
+  const moveType = (target: TypeActionTarget, direction: "up" | "down") => {
+    const siblingKey = direction === "up" ? target.previousKey : target.nextKey;
+    if (!siblingKey) return;
+    const nextOrder = reorderTypeTree(
+      typeTree,
+      typeKey(target.node.path),
+      siblingKey,
+      direction === "up" ? "before" : "after",
+    );
+    if (nextOrder) updateTypeOrder(nextOrder);
+  };
+
+  const startRename = (node: TypeNode) => {
+    setRenameTarget(node);
+    setRenameDraft(typeKey(node.path));
+  };
+
+  const submitRename = async () => {
+    if (!renameTarget) return;
+    const oldPath = renameTarget.path;
+    const newPath = parseTypePath(renameDraft);
+    if (!newPath.length || typeKey(newPath) === typeKey(oldPath)) {
+      setRenameTarget(null);
+      return;
+    }
+    const renamed = await renameType(oldPath, newPath);
+    if (!renamed) return;
+    setRenameTarget(null);
+    const oldKey = typeKey(oldPath);
+    const oldPrefix = `${oldKey}/`;
+    const newKey = typeKey(newPath);
+    updateTypeOrder(typeOrder.map((key) =>
+      key === oldKey
+        ? newKey
+        : key.startsWith(oldPrefix)
+          ? `${newKey}/${key.slice(oldPrefix.length)}`
+          : key,
+    ));
+    const defaultKey = typeKey(defaultNoteType);
+    if (defaultKey === oldKey || defaultKey.startsWith(`${oldKey}/`)) {
+      updateDefaultNoteType([...newPath, ...defaultNoteType.slice(oldPath.length)]);
+    }
+    if (scope.kind === "type") {
+      const activeKey = typeKey(scope.path);
+      if (activeKey === oldKey || activeKey.startsWith(`${oldKey}/`)) {
+        setScope({ kind: "type", path: [...newPath, ...scope.path.slice(oldPath.length)] });
+      }
+    }
+  };
+
+  const confirmDeleteType = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    const key = typeKey(target.path);
+    setDeleteTarget(null);
+    const deleted = await deleteType(target.path);
+    if (!deleted) return;
+    updateTypeOrder(typeOrder.filter((type) => type !== key && !type.startsWith(`${key}/`)));
+    const defaultKey = typeKey(defaultNoteType);
+    if (defaultKey === key || defaultKey.startsWith(`${key}/`)) {
+      updateDefaultNoteType(DEFAULT_TYPE);
+    }
+    const activeKey = scope.kind === "type" ? typeKey(scope.path) : null;
+    if (activeKey && (activeKey === key || activeKey.startsWith(`${key}/`))) {
+      setScope({ kind: "all" });
+    }
+  };
+
+  const createForScope = async () => {
+    if (scope.kind === "external") {
+      const ids = await openExternalNotes();
+      if (ids[0]) setSelectedNoteId(ids[0]);
+      return;
+    }
+    if (scope.kind === "files") {
+      const note = await createFileNote(creationType);
+      if (note) setSelectedNoteId(note.id);
+      return;
+    }
+    setComposerOpen(true);
   };
 
   const runVaultAction = async (action: () => Promise<boolean>) => {
@@ -482,20 +828,28 @@ export function MobileGrimoire() {
               </>
             )}
           </main>
-        ) : selectedNote ? (
+        ) : selectedNote && selectedSourceNote ? (
           <NoteView
-            note={selectedNote}
+            key={selectedSourceNote.id}
+            note={selectedSourceNote}
+            allNotes={vault.notes}
             onBack={() => setSelectedNoteId(null)}
             onBodyChange={(body) =>
               updateNoteBody(selectedNote.id, `# ${selectedNote.title}\n\n${body}`)
             }
+            onOpenNote={setSelectedNoteId}
+            onOpenFile={(id) => void openFileHub(id)}
           />
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto pb-28">
-            <header className="sticky top-0 z-20 grid grid-cols-[44px_1fr_44px] items-center border-b border-white/[0.07] bg-[#1c1d1e]/90 px-4 pb-3 pt-1 backdrop-blur-xl">
-              <Button variant="ghost" size="icon" onClick={() => setLibraryOpen(true)} className="h-11 w-11 rounded-full bg-[#2c2c2e] text-[#f5f5f7] hover:bg-[#363638]" aria-label="Open library"><Menu className="h-[21px] w-[21px]" /></Button>
-              <div className="min-w-0 text-center"><h1 className="truncate text-[19px] font-semibold tracking-[-0.02em]">All Notes</h1><p className="mt-0.5 text-[14px] text-[#8e8e93]">{filteredNotes.length} {filteredNotes.length === 1 ? "Note" : "Notes"}</p></div>
-              <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} className="h-11 w-11 rounded-full bg-[#2c2c2e] text-[#f5f5f7] hover:bg-[#363638]" aria-label="Settings"><Settings className="h-[20px] w-[20px]" /></Button>
+            <header className="sticky top-0 z-20 grid grid-cols-[44px_1fr_auto] items-center border-b border-white/[0.07] bg-[#1c1d1e]/90 px-4 pb-3 pt-1 backdrop-blur-xl">
+              <Button variant="ghost" size="icon" onClick={() => setLibraryOpen(true)} className="h-11 w-11 rounded-full bg-[#2c2c2e] text-[#f5f5f7] hover:bg-[#363638]" aria-label="Open Grimoire navigation"><Menu className="h-[21px] w-[21px]" /></Button>
+              <div className="min-w-0 text-center"><h1 className="truncate text-[19px] font-semibold tracking-[-0.02em]">{scopeTitle}</h1><p className="mt-0.5 text-[14px] text-[#8e8e93]">{filteredNotes.length} {scope.kind === "files" ? (filteredNotes.length === 1 ? "File" : "Files") : (filteredNotes.length === 1 ? "Note" : "Notes")}</p></div>
+              {scope.kind === "trash" && libraryCounts.trash > 0 ? (
+                <Button variant="ghost" onClick={() => setEmptyTrashConfirmOpen(true)} className="h-11 rounded-full px-3 text-[14px] font-semibold text-[#ff6961] hover:bg-[#363638] hover:text-[#ff6961]">Empty</Button>
+              ) : (
+                <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} className="h-11 w-11 rounded-full bg-[#2c2c2e] text-[#f5f5f7] hover:bg-[#363638]" aria-label="Settings"><Settings className="h-[20px] w-[20px]" /></Button>
+              )}
             </header>
             <main className="px-4 pb-8 pt-6">
               {query ? (
@@ -503,17 +857,95 @@ export function MobileGrimoire() {
               ) : (
                 <div className="space-y-7">
                   {pinnedNotes.length > 0 && <section><h2 className="mb-3 px-1 text-[24px] font-bold tracking-[-0.035em]">Pinned</h2><div className="overflow-hidden rounded-[18px] bg-[#222324] px-3">{pinnedNotes.map((note) => <NoteCard key={note.id} note={note} onOpen={(openedNote) => setSelectedNoteId(openedNote.id)} />)}</div></section>}
-                  {recentNotes.length > 0 && <section><h2 className="mb-3 px-1 text-[24px] font-bold tracking-[-0.035em]">Previous 30 Days</h2><div className="overflow-hidden rounded-[18px] bg-[#222324] px-3">{recentNotes.map((note) => <NoteCard key={note.id} note={note} onOpen={(openedNote) => setSelectedNoteId(openedNote.id)} />)}</div></section>}
+                  {recentNotes.length > 0 && <section><h2 className="mb-3 px-1 text-[24px] font-bold tracking-[-0.035em]">{scope.kind === "files" ? "Linked Files" : scope.kind === "external" ? "External Notes" : scope.kind === "trash" ? "Deleted Notes" : "Previous 30 Days"}</h2><div className="overflow-hidden rounded-[18px] bg-[#222324] px-3">{recentNotes.map((note) => <NoteCard key={note.id} note={note} onOpen={(openedNote) => setSelectedNoteId(openedNote.id)} />)}</div></section>}
+                  {filteredNotes.length === 0 && <section className="rounded-[18px] bg-[#222324] px-5 py-12 text-center">
+                    {scope.kind === "files" ? <FilePlus2 className="mx-auto h-7 w-7 text-[#65625f]" /> : scope.kind === "external" ? <ExternalLink className="mx-auto h-7 w-7 text-[#65625f]" /> : <FileText className="mx-auto h-7 w-7 text-[#65625f]" />}
+                    <p className="mt-3 text-[16px] font-semibold">{scope.kind === "files" ? "No linked files" : scope.kind === "external" ? "No external notes" : "No notes here"}</p>
+                    <p className="mt-1 text-sm text-[#8e8a85]">{scope.kind === "files" ? "Add any file and Grimoire will keep its linked note in your vault." : scope.kind === "external" ? "Open a Markdown file without moving it into your vault." : "This section is empty."}</p>
+                  </section>}
                 </div>
               )}
             </main>
           </div>
         )}
-        {vault.status === "ready" && !selectedNote && <BottomSearch query={query} onQueryChange={setQuery} onCreate={() => setComposerOpen(true)} />}
-        {libraryOpen && <LibraryDrawer notes={notes} onClose={() => setLibraryOpen(false)} onSelectAll={() => { setQuery(""); setLibraryOpen(false); }} onSelectType={(type) => { setQuery(type); setLibraryOpen(false); }} />}
+        {vault.status === "ready" && !selectedNote && <BottomSearch query={query} onQueryChange={setQuery} onCreate={scope.kind === "trash" ? undefined : () => void createForScope()} createLabel={scope.kind === "external" ? "Open an external note" : scope.kind === "files" ? "Add a linked file" : "Create a new note"} />}
+        {libraryOpen && <LibraryDrawer counts={libraryCounts} typeTree={typeTree} typeIcons={vault.typeIcons} onClose={() => setLibraryOpen(false)} onSelect={selectScope} onCreateType={() => setTypeDraft("")} onOpenTypeActions={setTypeActionTarget} />}
+        {libraryOpen && typeActionTarget && (
+          <TypeActionSheet
+            target={typeActionTarget}
+            onClose={() => setTypeActionTarget(null)}
+            onMoveUp={() => moveType(typeActionTarget, "up")}
+            onMoveDown={() => moveType(typeActionTarget, "down")}
+            onChangeIcon={() => setIconTarget(typeActionTarget.node)}
+            onAddSubtype={() => setTypeDraft(`${typeKey(typeActionTarget.node.path)}/`)}
+            onRename={() => startRename(typeActionTarget.node)}
+            onDelete={() => setDeleteTarget(typeActionTarget.node)}
+          />
+        )}
+        <Dialog open={typeDraft !== null} onOpenChange={(open) => { if (!open) setTypeDraft(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add type</DialogTitle></DialogHeader>
+            <form onSubmit={(event) => { event.preventDefault(); void submitNewType(); }}>
+              <Input autoFocus value={typeDraft ?? ""} onChange={(event) => setTypeDraft(event.target.value)} placeholder="type (e.g. work/projects)" />
+              <DialogFooter className="mt-4">
+                <Button type="button" variant="outline" onClick={() => setTypeDraft(null)}>Cancel</Button>
+                <Button type="submit">Add</Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+        <EmojiPickerDialog
+          open={iconTarget !== null}
+          typeName={iconTarget?.name ?? ""}
+          onOpenChange={(open) => { if (!open) setIconTarget(null); }}
+          onPick={(icon) => { if (iconTarget) setTypeIcon(iconTarget.path, icon); }}
+        />
+        <Dialog open={renameTarget !== null} onOpenChange={(open) => { if (!open) setRenameTarget(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Rename type "{renameTarget?.name}"</DialogTitle></DialogHeader>
+            <form onSubmit={(event) => { event.preventDefault(); void submitRename(); }}>
+              <Input autoFocus value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} placeholder="type (e.g. work/projects)" />
+              <DialogFooter className="mt-4">
+                <Button type="button" variant="outline" onClick={() => setRenameTarget(null)}>Cancel</Button>
+                <Button type="submit">Rename</Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+        <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete type "{deleteTarget?.name}"?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteTarget && deleteTarget.count > 0
+                  ? `${deleteTarget.count} note${deleteTarget.count === 1 ? "" : "s"} in this type will be moved to Trash.`
+                  : "This type has no notes."}
+                {deleteTarget && deleteTarget.children.length > 0 && <> Its sub-types will be deleted too.</>}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction className={buttonVariants({ variant: "destructive" })} onClick={() => void confirmDeleteType()}>Delete</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog open={emptyTrashConfirmOpen} onOpenChange={setEmptyTrashConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Empty trash?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {libraryCounts.trash} deleted {libraryCounts.trash === 1 ? "note" : "notes"} will be permanently removed. This can’t be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction className={buttonVariants({ variant: "destructive" })} onClick={() => void emptyTrash()}>Empty trash</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         {settingsOpen && <MobileSettings location={vault.location} onClose={() => setSettingsOpen(false)} onChangeVault={() => { setSettingsOpen(false); setVaultSetupOpen(true); }} />}
         {vault.status === "ready" && vaultSetupOpen && <VaultSetup nativeAvailable={isNativeApp} error={vault.error} onClose={() => setVaultSetupOpen(false)} onLocate={() => runVaultAction(locateMobileVault)} onCreateAtLocation={() => runVaultAction(createMobileVaultAtLocation)} onCreateOnDevice={() => runVaultAction(createMobileVaultOnDevice)} />}
-        {composerOpen && <Composer onClose={() => setComposerOpen(false)} onSave={saveQuickNote} />}
+        {composerOpen && <Composer onClose={() => setComposerOpen(false)} onSave={saveQuickNote} typePath={creationType} />}
         {!isNativeApp && <div className="pointer-events-none absolute bottom-1.5 left-1/2 z-50 h-1 w-32 -translate-x-1/2 rounded-full bg-[#f5f3ef]" />}
       </section>
       <div className="pointer-events-none fixed bottom-5 right-6 hidden items-center gap-2 rounded-full bg-[#232323]/90 px-3 py-2 text-xs font-medium text-[#aaa6a0] shadow-sm backdrop-blur sm:flex"><FileText className="h-3.5 w-3.5" />Interactive iOS prototype</div>

@@ -39,6 +39,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::pick_vault_folder,
             commands::restore_vault_folder,
             commands::clear_vault_folder,
+            commands::pick_external_notes,
+            commands::pick_files,
+            commands::open_file,
         ])
         .setup(|app, api| {
             #[cfg(mobile)]

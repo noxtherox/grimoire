@@ -44,6 +44,7 @@ describe("MobileFolderVault discovery", () => {
 
     expect(vault).not.toBeNull();
     expect(vault?.location).toBe("My Notes");
+    expect(vault?.absolutePath("Ideas/Existing.md")).toBe(notePath);
     expect((await vault?.loadAll())?.map((file) => file.path)).toEqual([
       "Ideas/Existing.md",
     ]);

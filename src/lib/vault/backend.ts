@@ -9,6 +9,8 @@ export interface VaultBackend {
   readonly kind: "desktop" | "browser" | "mobile";
   /** Human-readable location of the vault (absolute path, or a label). */
   readonly location: string;
+  /** Device filesystem path for a vault-relative file, when the shell can open it. */
+  absolutePath?(path: string): string | null;
   loadAll(): Promise<VaultFile[]>;
   /** Reads any text file in the vault (config etc.), throws if missing. */
   readText(path: string): Promise<string>;

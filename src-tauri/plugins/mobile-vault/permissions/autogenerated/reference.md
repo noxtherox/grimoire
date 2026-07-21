@@ -7,6 +7,9 @@ Default permissions for the plugin
 - `allow-pick-vault-folder`
 - `allow-restore-vault-folder`
 - `allow-clear-vault-folder`
+- `allow-pick-external-notes`
+- `allow-pick-files`
+- `allow-open-file`
 
 ## Permission Table
 
@@ -39,6 +42,84 @@ Enables the clear_vault_folder command without any pre-configured scope.
 <td>
 
 Denies the clear_vault_folder command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-vault:allow-open-file`
+
+</td>
+<td>
+
+Enables the open_file command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-vault:deny-open-file`
+
+</td>
+<td>
+
+Denies the open_file command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-vault:allow-pick-external-notes`
+
+</td>
+<td>
+
+Enables the pick_external_notes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-vault:deny-pick-external-notes`
+
+</td>
+<td>
+
+Denies the pick_external_notes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-vault:allow-pick-files`
+
+</td>
+<td>
+
+Enables the pick_files command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-vault:deny-pick-files`
+
+</td>
+<td>
+
+Denies the pick_files command without any pre-configured scope.
 
 </td>
 </tr>

@@ -6,31 +6,43 @@ import WebKit
 
 final class MobileVaultPlugin: Plugin, UIDocumentPickerDelegate {
   private let bookmarkKey = "grimoire.mobileVaultBookmark.v1"
+  private let externalBookmarksKey = "grimoire.mobileExternalBookmarks.v1"
   private var activeURL: URL?
   private var activeAccess = false
+  private var activeExternalURLs: [String: URL] = [:]
   private var pendingPickerInvoke: Invoke?
+  private var pendingPickerKind: PickerKind?
+  private var documentController: UIDocumentInteractionController?
 
   @objc public override func load(webview: WKWebView) {
+    let appBackground = UIColor(red: 28 / 255, green: 29 / 255, blue: 30 / 255, alpha: 1)
+    webview.overrideUserInterfaceStyle = .dark
+    webview.backgroundColor = appBackground
+    webview.scrollView.backgroundColor = appBackground
+    manager.viewController?.view.backgroundColor = appBackground
     _ = try? restoreBookmark()
+    restoreExternalBookmarks()
   }
 
   deinit {
     stopActiveAccess()
+    stopExternalAccess()
   }
 
   @objc public func pickVaultFolder(_ invoke: Invoke) {
-    guard pendingPickerInvoke == nil else {
+    guard beginPicker(invoke, kind: .vault) else {
       invoke.reject("A vault picker is already open")
       return
     }
 
     DispatchQueue.main.async {
       guard let viewController = self.manager.viewController else {
+        self.pendingPickerInvoke = nil
+        self.pendingPickerKind = nil
         invoke.reject("The iOS document browser is unavailable")
         return
       }
 
-      self.pendingPickerInvoke = invoke
       let picker = UIDocumentPickerViewController(
         forOpeningContentTypes: [UTType.folder],
         asCopy: false
@@ -39,6 +51,38 @@ final class MobileVaultPlugin: Plugin, UIDocumentPickerDelegate {
       picker.allowsMultipleSelection = false
       picker.modalPresentationStyle = .fullScreen
       viewController.present(picker, animated: true)
+    }
+  }
+
+  @objc public func pickExternalNotes(_ invoke: Invoke) {
+    let markdown = UTType(filenameExtension: "md") ?? .plainText
+    presentFilePicker(invoke, kind: .externalNotes, contentTypes: [markdown, .plainText], multiple: true)
+  }
+
+  @objc public func pickFiles(_ invoke: Invoke) {
+    presentFilePicker(invoke, kind: .files, contentTypes: [.item], multiple: false)
+  }
+
+  @objc public func openFile(_ invoke: Invoke) {
+    do {
+      let request = try invoke.parseArgs(OpenFileRequest.self)
+      let url = URL(fileURLWithPath: request.path)
+      DispatchQueue.main.async {
+        guard let view = self.manager.viewController?.view else {
+          invoke.reject("The iOS document browser is unavailable")
+          return
+        }
+        let controller = UIDocumentInteractionController(url: url)
+        self.documentController = controller
+        if controller.presentOpenInMenu(from: view.bounds, in: view, animated: true) {
+          invoke.resolve()
+        } else {
+          self.documentController = nil
+          invoke.reject("No app on this device can open that file")
+        }
+      }
+    } catch {
+      invoke.reject("Could not open that file: \(error.localizedDescription)")
     }
   }
 
@@ -68,12 +112,28 @@ final class MobileVaultPlugin: Plugin, UIDocumentPickerDelegate {
   ) {
     guard let invoke = pendingPickerInvoke else { return }
     pendingPickerInvoke = nil
+    let pickerKind = pendingPickerKind
+    pendingPickerKind = nil
 
-    guard let url = urls.first else {
-      invoke.resolve(["vault": NSNull()])
+    guard !urls.isEmpty else {
+      resolveCancelled(invoke, kind: pickerKind)
       return
     }
 
+    if pickerKind != .vault {
+      do {
+        try urls.forEach(activateExternal)
+        saveExternalBookmarks()
+        invoke.resolve([
+          "files": urls.map { ["path": $0.path, "name": $0.lastPathComponent] }
+        ])
+      } catch {
+        invoke.reject("Could not open the selected file: \(error.localizedDescription)")
+      }
+      return
+    }
+
+    guard let url = urls.first else { return }
     do {
       try activate(url)
       let values = try url.resourceValues(forKeys: [.isDirectoryKey])
@@ -91,8 +151,54 @@ final class MobileVaultPlugin: Plugin, UIDocumentPickerDelegate {
   }
 
   func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-    pendingPickerInvoke?.resolve(["vault": NSNull()])
+    if let invoke = pendingPickerInvoke {
+      resolveCancelled(invoke, kind: pendingPickerKind)
+    }
     pendingPickerInvoke = nil
+    pendingPickerKind = nil
+  }
+
+  private func beginPicker(_ invoke: Invoke, kind: PickerKind) -> Bool {
+    guard pendingPickerInvoke == nil else { return false }
+    pendingPickerInvoke = invoke
+    pendingPickerKind = kind
+    return true
+  }
+
+  private func presentFilePicker(
+    _ invoke: Invoke,
+    kind: PickerKind,
+    contentTypes: [UTType],
+    multiple: Bool
+  ) {
+    guard beginPicker(invoke, kind: kind) else {
+      invoke.reject("A file picker is already open")
+      return
+    }
+    DispatchQueue.main.async {
+      guard let viewController = self.manager.viewController else {
+        self.pendingPickerInvoke = nil
+        self.pendingPickerKind = nil
+        invoke.reject("The iOS document browser is unavailable")
+        return
+      }
+      let picker = UIDocumentPickerViewController(
+        forOpeningContentTypes: contentTypes,
+        asCopy: false
+      )
+      picker.delegate = self
+      picker.allowsMultipleSelection = multiple
+      picker.modalPresentationStyle = .fullScreen
+      viewController.present(picker, animated: true)
+    }
+  }
+
+  private func resolveCancelled(_ invoke: Invoke, kind: PickerKind?) {
+    if kind == .vault {
+      invoke.resolve(["vault": NSNull()])
+    } else {
+      invoke.resolve(["files": []])
+    }
   }
 
   private func response(for url: URL) -> [String: Any] {
@@ -148,6 +254,60 @@ final class MobileVaultPlugin: Plugin, UIDocumentPickerDelegate {
     if isStale { try saveBookmark(for: url) }
     return url
   }
+
+  private func activateExternal(_ url: URL) throws {
+    let key = url.standardizedFileURL.path
+    if activeExternalURLs[key] != nil { return }
+    guard url.startAccessingSecurityScopedResource() else {
+      throw MobileVaultError.securityScopeUnavailable
+    }
+    activeExternalURLs[key] = url
+  }
+
+  private func saveExternalBookmarks() {
+    let bookmarks = activeExternalURLs.values.compactMap { url in
+      try? url.bookmarkData(
+        options: [],
+        includingResourceValuesForKeys: nil,
+        relativeTo: nil
+      )
+    }
+    UserDefaults.standard.set(bookmarks, forKey: externalBookmarksKey)
+  }
+
+  private func restoreExternalBookmarks() {
+    guard let bookmarks = UserDefaults.standard.array(forKey: externalBookmarksKey) as? [Data] else {
+      return
+    }
+    var refreshed = false
+    for bookmark in bookmarks {
+      var isStale = false
+      guard let url = try? URL(
+        resolvingBookmarkData: bookmark,
+        options: [],
+        relativeTo: nil,
+        bookmarkDataIsStale: &isStale
+      ) else { continue }
+      try? activateExternal(url)
+      refreshed = refreshed || isStale
+    }
+    if refreshed { saveExternalBookmarks() }
+  }
+
+  private func stopExternalAccess() {
+    activeExternalURLs.values.forEach { $0.stopAccessingSecurityScopedResource() }
+    activeExternalURLs.removeAll()
+  }
+}
+
+private enum PickerKind {
+  case vault
+  case externalNotes
+  case files
+}
+
+private struct OpenFileRequest: Decodable {
+  let path: String
 }
 
 private enum MobileVaultError: LocalizedError {

@@ -25,4 +25,16 @@ impl<R: Runtime> MobileVault<R> {
     pub fn clear_vault_folder(&self) -> crate::Result<()> {
         Ok(())
     }
+
+    pub fn pick_external_notes(&self) -> crate::Result<PickedFilesResponse> {
+        Ok(PickedFilesResponse::default())
+    }
+
+    pub fn pick_files(&self) -> crate::Result<PickedFilesResponse> {
+        Ok(PickedFilesResponse::default())
+    }
+
+    pub fn open_file(&self, _request: OpenFileRequest) -> crate::Result<()> {
+        Ok(())
+    }
 }

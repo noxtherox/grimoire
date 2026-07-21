@@ -35,6 +35,10 @@ export class DesktopVault implements VaultBackend {
     return `${this.root}/${relPath}`;
   }
 
+  absolutePath(path: string): string {
+    return this.abs(path);
+  }
+
   async loadAll(): Promise<VaultFile[]> {
     const files: VaultFile[] = [];
 
