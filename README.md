@@ -88,6 +88,27 @@ pnpm build           # build the web app
 pnpm desktop:build   # build installable desktop bundles for the current OS
 ```
 
+## Releases and automatic updates
+
+To publish a new Apple Silicon version, start from a clean, up-to-date `main`
+branch and run:
+
+```sh
+pnpm release 0.3.0
+```
+
+The release command verifies the build and tests, keeps the Tauri and Rust
+versions in sync, commits the version bump, creates the matching `v0.3.0` tag,
+and pushes both atomically. GitHub Actions then builds the DMG and signed updater
+bundle, publishes the GitHub Release, and generates `latest.json`. Installed
+desktop copies check that file on launch and every six hours, install newer
+signed versions, and relaunch automatically.
+
+The updater private key is stored in the repository's
+`TAURI_SIGNING_PRIVATE_KEY` Actions secret. Back up the local key at
+`~/.tauri/grimoire-updater.key`; losing it prevents existing installations from
+accepting future updates.
+
 The project is built with React, TypeScript, CodeMirror 6, Tailwind CSS,
 shadcn/ui, and Tauri 2. The native Rust layer provides filesystem integration,
 desktop file opening, and the embedded PTY terminal.

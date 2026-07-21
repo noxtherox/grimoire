@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": ["binaries/*"],
     "macOS": {
       "signingIdentity": "-"
@@ -74,6 +75,14 @@
     "iOS": {
       "minimumSystemVersion": "16.0",
       "infoPlist": "Info.ios.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk3MTFGMjMwMDQ0QTMxQTUKUldTbE1Vb0VNUElSbC9vUWhHM200UWxmR1FZMEU1QjlGL0xtbWJnR0REZFdBSXhMQmpjY3N6VGEK",
+      "endpoints": [
+        "https://github.com/noxtherox/grimoire/releases/latest/download/latest.json"
+      ]
     }
   }
 }

@@ -44,6 +44,7 @@ import {
 } from "@/lib/note-preferences";
 import { cn } from "@/lib/utils";
 import { showError } from "@/utils/toast";
+import { startAutoUpdater } from "@/lib/auto-updater";
 
 const SIDEBAR_DEFAULT_SIZE = 15;
 const NOTE_LIST_DEFAULT_SIZE = 18;
@@ -90,6 +91,8 @@ const Index = () => {
     initStore();
     return stopListening;
   }, []);
+
+  useEffect(() => startAutoUpdater(), []);
 
   useEffect(() => {
     const refresh = () => void refreshVaultFromDisk();
