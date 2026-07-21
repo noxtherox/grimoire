@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Grimoire",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.grimoire.notes",
   "build": {
     "frontendDist": "../dist",
@@ -29,7 +29,9 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "resources": ["binaries/*"],
+    "resources": [
+      "binaries/*"
+    ],
     "macOS": {
       "signingIdentity": "-"
     },
@@ -42,29 +44,56 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["md", "markdown"],
+        "ext": [
+          "md",
+          "markdown"
+        ],
         "name": "Markdown document",
-        "contentTypes": ["net.daringfireball.markdown"],
+        "contentTypes": [
+          "net.daringfireball.markdown"
+        ],
         "role": "Editor",
         "rank": "Default"
       },
       {
-        "ext": ["pdf"],
+        "ext": [
+          "pdf"
+        ],
         "name": "PDF document",
-        "contentTypes": ["com.adobe.pdf"],
+        "contentTypes": [
+          "com.adobe.pdf"
+        ],
         "role": "Viewer",
         "rank": "Alternate"
       },
       {
-        "ext": ["doc", "docx", "rtf", "txt", "odt", "xls", "xlsx", "csv", "ppt", "pptx", "pages", "numbers", "key"],
+        "ext": [
+          "doc",
+          "docx",
+          "rtf",
+          "txt",
+          "odt",
+          "xls",
+          "xlsx",
+          "csv",
+          "ppt",
+          "pptx",
+          "pages",
+          "numbers",
+          "key"
+        ],
         "name": "Office document",
         "role": "Viewer",
         "rank": "Alternate"
       },
       {
-        "ext": ["*"],
+        "ext": [
+          "*"
+        ],
         "name": "File",
-        "contentTypes": ["public.data"],
+        "contentTypes": [
+          "public.data"
+        ],
         "role": "Viewer",
         "rank": "Alternate"
       }
