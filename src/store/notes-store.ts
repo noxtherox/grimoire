@@ -24,6 +24,7 @@ import {
   logicalPath,
   normalizeFsPath,
   noteAbsolutePath,
+  noteSnippet,
   noteTitle,
   noteTypePath,
   notesOfTypeKey,
@@ -89,6 +90,7 @@ const VAULT_PATH_KEY = "grimoire.vaultPath";
 const EXTERNAL_PATHS_KEY = "grimoire.externalPaths";
 const FILE_LOCATION_MAPPINGS_KEY = "grimoire.fileLocationMappings.v1";
 const FILE_HUB_MAPPINGS_KEY = "grimoire.fileHubMappings.v1";
+const STARTUP_CACHE_KEY_PREFIX = "grimoire.startupCache.v1.";
 const FLUSH_DELAY_MS = 500;
 
 export interface VaultState {
@@ -107,6 +109,10 @@ export interface VaultState {
   fileLocations: FileLocationDefinition[];
   /** Notes temporarily locked while a close or move operation commits. */
   busyNoteIds: ReadonlySet<string>;
+  /** Notes whose real disk content has not arrived during startup refresh. */
+  loadingNoteIds: ReadonlySet<string>;
+  /** The cached note index is visible while the desktop vault refreshes. */
+  isRefreshing: boolean;
   /** Simultaneous editor and disk edits awaiting an explicit user choice. */
   conflicts: Readonly<Record<string, NoteConflict>>;
   error: string | null;
@@ -130,6 +136,8 @@ let state: VaultState = {
   typeIcons: {},
   fileLocations: [],
   busyNoteIds: new Set(),
+  loadingNoteIds: new Set(),
+  isRefreshing: false,
   conflicts: {},
   error: null,
 };
@@ -148,6 +156,8 @@ let desktopOpenDrain: Promise<void> | null = null;
 let desktopSyncTimer: ReturnType<typeof setInterval> | null = null;
 let desktopSyncInFlight = false;
 const pendingDesktopOpenPaths: string[] = [];
+const pendingStartupNoteLoads = new Map<string, Promise<void>>();
+const startupEditedNoteIds = new Set<string>();
 const desktopOpenListeners = new Set<
   (
     ids: string[],
@@ -176,6 +186,47 @@ export function useVault(): VaultState {
 
 export function getNotes(): Note[] {
   return state.notes;
+}
+
+export function prioritizeNoteLoad(id: string): Promise<void> {
+  if (!state.loadingNoteIds.has(id) || !(backend instanceof DesktopVault)) {
+    return Promise.resolve();
+  }
+  const existing = pendingStartupNoteLoads.get(id);
+  if (existing) return existing;
+  const activeBackend = backend;
+  const note = state.notes.find((candidate) => candidate.id === id);
+  if (!note) return Promise.resolve();
+  const operation = activeBackend
+    .loadFile(note.path)
+    .then((file) => {
+      if (backend !== activeBackend) return;
+      const current = state.notes.find((candidate) => candidate.id === id);
+      if (!current) return;
+      const loaded = noteFromVaultFile(
+        file,
+        loadPinnedPaths(),
+        loadArchivedPaths(),
+        id,
+      );
+      diskSnapshots.set(id, file.content);
+      const loadingNoteIds = new Set(state.loadingNoteIds);
+      loadingNoteIds.delete(id);
+      setState({
+        notes: state.notes.map((candidate) =>
+          candidate.id === id ? loaded : candidate,
+        ),
+        loadingNoteIds,
+      });
+    })
+    .catch((error) => {
+      console.error("Grimoire: failed to prioritize startup note", error);
+    })
+    .finally(() => {
+      pendingStartupNoteLoads.delete(id);
+    });
+  pendingStartupNoteLoads.set(id, operation);
+  return operation;
 }
 
 function loadStringMap(key: string): Record<string, string> {
@@ -418,9 +469,122 @@ async function loadFileLocations(
   }
 }
 
+interface StartupCachedNote {
+  id: string;
+  path: string;
+  title: string;
+  snippet: string;
+  pinned: boolean;
+  archived: boolean;
+  updatedAt: string;
+}
+
+interface StartupVaultCache {
+  version: 1;
+  location: string;
+  notes: StartupCachedNote[];
+  extraTypes: string[][];
+  schemas: PropertySchemas;
+  typeIcons: TypeIcons;
+  fileLocations: FileLocationDefinition[];
+}
+
+function startupCacheKey(location: string): string {
+  return `${STARTUP_CACHE_KEY_PREFIX}${location}`;
+}
+
+function loadStartupCache(location: string): StartupVaultCache | null {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(startupCacheKey(location)) ?? "null",
+    ) as StartupVaultCache | null;
+    if (
+      !parsed ||
+      parsed.version !== 1 ||
+      parsed.location !== location ||
+      !Array.isArray(parsed.notes) ||
+      !Array.isArray(parsed.extraTypes)
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function cachedNotePlaceholder(note: StartupCachedNote): Note {
+  return {
+    id: note.id,
+    path: note.path,
+    content: `# ${note.title}\n\n${note.snippet}`,
+    pinned: note.pinned,
+    archived: note.archived,
+    updatedAt: note.updatedAt,
+  };
+}
+
+function saveStartupCache(
+  location: string,
+  notes: Note[],
+  extraTypes: string[][],
+  schemas: PropertySchemas,
+  typeIcons: TypeIcons,
+  fileLocations: FileLocationDefinition[],
+) {
+  const cachedNotes = notes
+    .filter((note) => !isExternalNote(note))
+    .map<StartupCachedNote>((note) => ({
+      id: note.id,
+      path: note.path,
+      title: noteTitle(note),
+      snippet: noteSnippet(note),
+      pinned: note.pinned,
+      archived: note.archived === true,
+      updatedAt: note.updatedAt,
+    }))
+    .sort((left, right) => {
+      if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
+      return right.updatedAt.localeCompare(left.updatedAt);
+    });
+  const cache: StartupVaultCache = {
+    version: 1,
+    location,
+    notes: cachedNotes,
+    extraTypes,
+    schemas,
+    typeIcons,
+    fileLocations,
+  };
+  try {
+    localStorage.setItem(startupCacheKey(location), JSON.stringify(cache));
+  } catch {
+    // The startup index is an optional speed-up and can always be rebuilt.
+  }
+}
+
+function noteFromVaultFile(
+  file: Awaited<ReturnType<DesktopVault["loadFile"]>>,
+  pinnedPaths: Set<string>,
+  archivedPaths: Set<string>,
+  existingId?: string,
+): Note {
+  const metadata = readGrimoireMetadata(file.content);
+  return {
+    id: existingId ?? metadata.id ?? crypto.randomUUID(),
+    path: file.path,
+    content: file.content,
+    pinned: metadata.pinned || pinnedPaths.has(file.path),
+    archived: metadata.archived || archivedPaths.has(file.path),
+    updatedAt: file.updatedAt,
+  };
+}
+
 async function loadVault(nextBackend: VaultBackend) {
   backend = nextBackend;
   clearImageUrlCache();
+  pendingStartupNoteLoads.clear();
+  startupEditedNoteIds.clear();
   setState({
     status: "loading",
     location: nextBackend.location,
@@ -431,29 +595,97 @@ async function loadVault(nextBackend: VaultBackend) {
     typeIcons: {},
     fileLocations: [],
     busyNoteIds: new Set(),
+    loadingNoteIds: new Set(),
+    isRefreshing: false,
     conflicts: {},
     error: null,
   });
   try {
+    const startupCache =
+      nextBackend.kind === "desktop"
+        ? loadStartupCache(nextBackend.location)
+        : null;
+    if (startupCache) {
+      const cachedNotes = startupCache.notes.map(cachedNotePlaceholder);
+      setState({
+        status: "ready",
+        notes: cachedNotes,
+        extraTypes: startupCache.extraTypes,
+        schemas: startupCache.schemas,
+        typeIcons: startupCache.typeIcons,
+        fileLocations: startupCache.fileLocations,
+        loadingNoteIds: new Set(cachedNotes.map((note) => note.id)),
+        isRefreshing: true,
+      });
+    }
+    const pinned = loadPinnedPaths();
+    const archived = loadArchivedPaths();
+    const applyPriorityFiles = (
+      files: Awaited<ReturnType<DesktopVault["loadAll"]>>,
+    ) => {
+      if (backend !== nextBackend || files.length === 0) return;
+      const existingByPath = new Map(
+        state.notes.map((note) => [note.path, note] as const),
+      );
+      const loadedByPath = new Map(
+        files.map((file) => {
+          const existing = existingByPath.get(file.path);
+          const note = noteFromVaultFile(file, pinned, archived, existing?.id);
+          diskSnapshots.set(note.id, file.content);
+          return [file.path, note] as const;
+        }),
+      );
+      const notes = state.notes.length
+        ? [
+            ...state.notes.map((note) => loadedByPath.get(note.path) ?? note),
+            ...[...loadedByPath.values()].filter(
+              (note) => !existingByPath.has(note.path),
+            ),
+          ]
+        : [...loadedByPath.values()];
+      const loadedIds = new Set([...loadedByPath.values()].map((note) => note.id));
+      const loadingNoteIds = new Set(state.loadingNoteIds);
+      for (const id of loadedIds) loadingNoteIds.delete(id);
+      setState({
+        status: "ready",
+        notes,
+        loadingNoteIds,
+        isRefreshing: true,
+      });
+    };
+    const priorityPaths = startupCache?.notes
+      .filter(
+        (note) =>
+          !note.archived && !note.path.startsWith(`${TRASH_DIR}/`),
+      )
+      .map((note) => note.path);
     const [files, schemas, dirs, typeIcons, fileLocations] = await Promise.all([
-      nextBackend.loadAll(),
+      nextBackend instanceof DesktopVault
+        ? nextBackend.loadAll({
+            priorityPaths,
+            onPriorityLoaded: applyPriorityFiles,
+          })
+        : nextBackend.loadAll(),
       loadSchemas(nextBackend),
       nextBackend.listDirs(),
       loadTypeIcons(nextBackend),
       loadFileLocations(nextBackend),
     ]);
-    const pinned = loadPinnedPaths();
-    const archived = loadArchivedPaths();
     const vaultNotes: Note[] = files.map((file) => {
-      const metadata = readGrimoireMetadata(file.content);
-      return {
-        id: metadata.id ?? crypto.randomUUID(),
-        path: file.path,
-        content: file.content,
-        pinned: metadata.pinned || pinned.has(file.path),
-        archived: metadata.archived || archived.has(file.path),
-        updatedAt: file.updatedAt,
-      };
+      const edited = state.notes.find(
+        (note) =>
+          note.path === file.path && startupEditedNoteIds.has(note.id),
+      );
+      const loaded = noteFromVaultFile(file, pinned, archived, edited?.id);
+      return edited
+        ? {
+            ...loaded,
+            content: edited.content,
+            pinned: edited.pinned,
+            archived: edited.archived,
+            updatedAt: edited.updatedAt,
+          }
+        : loaded;
     });
     let externalNotes =
       nextBackend.kind === "browser" ? [] : await loadExternalNotes();
@@ -486,7 +718,17 @@ async function loadVault(nextBackend: VaultBackend) {
       .map((dir) => dir.split("/").slice(0, MAX_TYPE_DEPTH));
     const loadedNotes = [...externalNotes, ...vaultNotes];
     diskSnapshots.clear();
-    for (const note of loadedNotes) diskSnapshots.set(note.id, note.content);
+    for (const note of loadedNotes) {
+      if (startupEditedNoteIds.has(note.id)) {
+        const diskFile = files.find((file) => file.path === note.path);
+        if (diskFile) diskSnapshots.set(note.id, diskFile.content);
+      } else {
+        diskSnapshots.set(note.id, note.content);
+      }
+    }
+    const editedIds = [...startupEditedNoteIds].filter((id) =>
+      loadedNotes.some((note) => note.id === id),
+    );
     setState({
       status: "ready",
       notes: loadedNotes,
@@ -494,15 +736,37 @@ async function loadVault(nextBackend: VaultBackend) {
       schemas,
       typeIcons,
       fileLocations,
+      loadingNoteIds: new Set(),
+      isRefreshing: false,
     });
+    startupEditedNoteIds.clear();
+    for (const id of editedIds) {
+      pendingFlush.set(
+        id,
+        setTimeout(() => void flushNote(id), FLUSH_DELAY_MS),
+      );
+    }
     if (nextBackend.kind === "desktop") {
+      saveStartupCache(
+        nextBackend.location,
+        vaultNotes,
+        extraTypes,
+        schemas,
+        typeIcons,
+        fileLocations,
+      );
       void invoke("cli_register_vault", {
         vaultPath: nextBackend.location,
       }).catch((error) => reportError("register vault with CLI", error));
     }
     void drainDesktopOpenPaths();
   } catch (error) {
-    setState({ status: "error", error: String(error) });
+    setState({
+      status: "error",
+      loadingNoteIds: new Set(),
+      isRefreshing: false,
+      error: String(error),
+    });
   }
 }
 
@@ -1025,8 +1289,18 @@ async function diskStillMatchesSnapshot(note: Note): Promise<boolean> {
 }
 
 export function updateNoteContent(id: string, content: string) {
-  if (closingAfterFlush || state.busyNoteIds.has(id)) return;
+  if (
+    closingAfterFlush ||
+    state.busyNoteIds.has(id) ||
+    state.loadingNoteIds.has(id)
+  ) {
+    return;
+  }
   updateNote(id, { content, updatedAt: new Date().toISOString() });
+  if (state.isRefreshing) {
+    startupEditedNoteIds.add(id);
+    return;
+  }
   const conflict = state.conflicts[id];
   if (conflict) {
     setState({
@@ -1125,6 +1399,10 @@ async function flushAll(): Promise<boolean> {
     return false;
   }
   let saved = true;
+  for (const id of [...startupEditedNoteIds]) {
+    if (await flushUntilIdle(id)) startupEditedNoteIds.delete(id);
+    else saved = false;
+  }
   do {
     const ids = new Set([...pendingFlush.keys(), ...inFlightFlush.keys()]);
     for (const id of ids) {

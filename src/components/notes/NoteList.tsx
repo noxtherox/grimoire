@@ -79,6 +79,7 @@ interface NoteListProps {
   listFilters: NoteListFilterState;
   selectedNoteId: string | null;
   search: string;
+  isRefreshing: boolean;
   onSearchChange: (value: string) => void;
   onListFiltersChange: (filters: NoteListFilterState) => void;
   onSelectNote: (id: string) => void;
@@ -94,6 +95,7 @@ export function NoteList({
   listFilters,
   selectedNoteId,
   search,
+  isRefreshing,
   onSearchChange,
   onListFiltersChange,
   onSelectNote,
@@ -157,7 +159,12 @@ export function NoteList({
 
   return (
     <div className="flex h-full flex-col bg-grim-surface">
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2.5">
+      <div
+        className={cn(
+          "flex items-center gap-2 border-b border-border/60 px-3 py-2.5",
+          isRefreshing && "pointer-events-none opacity-70",
+        )}
+      >
         <span className="flex-1 truncate text-sm font-semibold">{heading}</span>
         {inTrash ? (
           notes.length > 0 && (
@@ -199,7 +206,12 @@ export function NoteList({
           </Button>
         )}
       </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 px-3 py-2">
+      <div
+        className={cn(
+          "grid grid-cols-[minmax(0,1fr)_auto] gap-2 px-3 py-2",
+          isRefreshing && "pointer-events-none opacity-70",
+        )}
+      >
         <div className="relative min-w-0">
           <Search
             size={14}
@@ -250,7 +262,7 @@ export function NoteList({
           const type = typeKey(noteTypePath(note));
           return (
             <ContextMenu key={note.id}>
-              <ContextMenuTrigger asChild>
+              <ContextMenuTrigger asChild disabled={isRefreshing}>
                 <button
                   onClick={() => onSelectNote(note.id)}
                   className={cn(

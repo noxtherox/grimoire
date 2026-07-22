@@ -94,15 +94,16 @@ To publish a new Apple Silicon version, start from a clean, up-to-date `main`
 branch and run:
 
 ```sh
-pnpm release 0.3.0
+pnpm release 0.3.1
 ```
 
 The release command verifies the build and tests, keeps the Tauri and Rust
-versions in sync, commits the version bump, creates the matching `v0.3.0` tag,
+versions in sync, commits the version bump, creates the matching `v0.3.1` tag,
 and pushes both atomically. GitHub Actions then builds the DMG and signed updater
 bundle, publishes the GitHub Release, and generates `latest.json`. Installed
-desktop copies check that file on launch and every six hours, install newer
-signed versions, and relaunch automatically.
+desktop copies check that file on launch and every six hours. When an update is
+available, the user can download and install it or ask Grimoire to remind them
+again in 24 hours. Grimoire relaunches after an accepted update is installed.
 
 The updater private key is stored in the repository's
 `TAURI_SIGNING_PRIVATE_KEY` Actions secret. Back up the local key at

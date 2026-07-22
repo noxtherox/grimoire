@@ -24,6 +24,7 @@ import {
   moveExternalNoteToVault,
   onDesktopNotesOpened,
   openExternalNotes,
+  prioritizeNoteLoad,
   refreshVaultFromDisk,
   useVault,
 } from "@/store/notes-store";
@@ -44,7 +45,7 @@ import {
 } from "@/lib/note-preferences";
 import { cn } from "@/lib/utils";
 import { showError } from "@/utils/toast";
-import { startAutoUpdater } from "@/lib/auto-updater";
+import { AutoUpdater } from "@/lib/auto-updater";
 
 const SIDEBAR_DEFAULT_SIZE = 15;
 const NOTE_LIST_DEFAULT_SIZE = 18;
@@ -91,8 +92,6 @@ const Index = () => {
     initStore();
     return stopListening;
   }, []);
-
-  useEffect(() => startAutoUpdater(), []);
 
   useEffect(() => {
     const refresh = () => void refreshVaultFromDisk();
@@ -154,6 +153,7 @@ const Index = () => {
   };
 
   const handleCreateNote = async () => {
+    if (vault.isRefreshing) return;
     const typePath =
       filter.kind === "type"
         ? filter.path
@@ -175,6 +175,7 @@ const Index = () => {
   };
 
   const handleCreateFile = async () => {
+    if (vault.isRefreshing) return;
     const note = await createFileNote(defaultNoteType);
     if (!note) return;
     setFilter({ kind: "files" });
@@ -185,6 +186,7 @@ const Index = () => {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (vault.isRefreshing) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         void handleCreateNote();
@@ -193,7 +195,7 @@ const Index = () => {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, defaultNoteType]);
+  }, [filter, defaultNoteType, vault.isRefreshing]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -206,6 +208,7 @@ const Index = () => {
         return;
       }
       event.preventDefault();
+      if (vault.isRefreshing) return;
       if (!vault.isDesktop) return;
       if (!selectedNote) {
         showError("Select a note to open its terminal.");
@@ -215,13 +218,19 @@ const Index = () => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedNote, vault.isDesktop]);
+  }, [selectedNote, vault.isDesktop, vault.isRefreshing]);
 
   const handleOpenNote = (id: string) => {
     setFilter({ kind: "all" });
     setListFilters(EMPTY_NOTE_LIST_FILTERS);
     setSearch("");
     setSelectedNoteId(id);
+    void prioritizeNoteLoad(id);
+  };
+
+  const handleSelectNote = (id: string) => {
+    setSelectedNoteId(id);
+    void prioritizeNoteLoad(id);
   };
 
   const handleOpenExternalNotes = async () => {
@@ -318,14 +327,21 @@ const Index = () => {
   }
 
   return (
-    <div
-      className={cn(
-        "relative flex h-screen w-screen overflow-hidden",
-        isSidebarCollapsed && !isFocusMode && "pl-12",
-      )}
-    >
+    <>
+      <AutoUpdater />
+      <div
+        className={cn(
+          "relative flex h-screen w-screen overflow-hidden",
+          isSidebarCollapsed && !isFocusMode && "pl-12",
+        )}
+      >
       {isSidebarCollapsed && !isFocusMode && (
-        <div className="absolute inset-y-0 left-0 w-12">
+        <div
+          className={cn(
+            "absolute inset-y-0 left-0 w-12",
+            vault.isRefreshing && "pointer-events-none",
+          )}
+        >
           <CollapsedSidebar
             notes={notes}
             extraTypes={vault.extraTypes}
@@ -359,22 +375,29 @@ const Index = () => {
           onExpand={() => setIsSidebarCollapsed(false)}
           className={isFocusMode ? "invisible" : undefined}
         >
-          <Sidebar
-            notes={notes}
-            extraTypes={vault.extraTypes}
-            typeIcons={vault.typeIcons}
-            typeOrder={typeOrder}
-            filter={filter}
-            isDesktop={vault.isDesktop}
-            vaultLocation={vault.location}
-            defaultNoteType={defaultNoteType}
-            hideSubtypeNotes={hideSubtypeNotes}
-            onDefaultNoteTypeChange={handleDefaultNoteTypeChange}
-            onHideSubtypeNotesChange={handleHideSubtypeNotesChange}
-            onTypeOrderChange={handleTypeOrderChange}
-            onFilterChange={handleFilterChange}
-            onCollapse={() => sidebarPanelRef.current?.collapse()}
-          />
+          <div
+            className={cn(
+              "h-full",
+              vault.isRefreshing && "pointer-events-none",
+            )}
+          >
+            <Sidebar
+              notes={notes}
+              extraTypes={vault.extraTypes}
+              typeIcons={vault.typeIcons}
+              typeOrder={typeOrder}
+              filter={filter}
+              isDesktop={vault.isDesktop}
+              vaultLocation={vault.location}
+              defaultNoteType={defaultNoteType}
+              hideSubtypeNotes={hideSubtypeNotes}
+              onDefaultNoteTypeChange={handleDefaultNoteTypeChange}
+              onHideSubtypeNotesChange={handleHideSubtypeNotesChange}
+              onTypeOrderChange={handleTypeOrderChange}
+              onFilterChange={handleFilterChange}
+              onCollapse={() => sidebarPanelRef.current?.collapse()}
+            />
+          </div>
         </ResizablePanel>
         <ResizableHandle
           className={isFocusMode ? "hidden" : "w-px bg-transparent"}
@@ -393,9 +416,10 @@ const Index = () => {
             listFilters={listFilters}
             selectedNoteId={selectedNoteId}
             search={search}
+            isRefreshing={vault.isRefreshing}
             onSearchChange={setSearch}
             onListFiltersChange={setListFilters}
-            onSelectNote={setSelectedNoteId}
+            onSelectNote={handleSelectNote}
             onCreateNote={() => void handleCreateNote()}
             onCreateFile={() => void handleCreateFile()}
             onOpenExternalNotes={() => void handleOpenExternalNotes()}
@@ -417,6 +441,12 @@ const Index = () => {
                 isBusy={
                   selectedNote ? vault.busyNoteIds.has(selectedNote.id) : false
                 }
+                isLoading={
+                  selectedNote
+                    ? vault.loadingNoteIds.has(selectedNote.id)
+                    : false
+                }
+                isRefreshing={vault.isRefreshing}
                 onOpenNote={handleOpenNote}
                 onMoveExternalToVault={(id, typePath) =>
                   void handleMoveExternalToVault(id, typePath)
@@ -447,7 +477,14 @@ const Index = () => {
         </ResizablePanel>
         </ResizablePanelGroup>
       </div>
-    </div>
+      {vault.isRefreshing && (
+        <div className="pointer-events-none absolute right-4 top-4 z-50 flex items-center gap-2 rounded-full border border-border/60 bg-background/90 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Refreshing notes…
+        </div>
+      )}
+      </div>
+    </>
   );
 };
 

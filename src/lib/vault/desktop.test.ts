@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-const readState = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
+const readState = vi.hoisted(() => ({ active: 0, maxActive: 0, dirs: 0 }));
 
 vi.mock("@tauri-apps/plugin-fs", async () => {
   const fs = await import("node:fs/promises");
@@ -12,12 +12,14 @@ vi.mock("@tauri-apps/plugin-fs", async () => {
       fs.access(path).then(() => true).catch(() => false),
     mkdir: (path: string, options?: { recursive?: boolean }) =>
       fs.mkdir(path, options),
-    readDir: async (path: string) =>
-      (await fs.readdir(path, { withFileTypes: true })).map((entry) => ({
+    readDir: async (path: string) => {
+      readState.dirs += 1;
+      return (await fs.readdir(path, { withFileTypes: true })).map((entry) => ({
         name: entry.name,
         isDirectory: entry.isDirectory(),
         isFile: entry.isFile(),
-      })),
+      }));
+    },
     readFile: async (path: string) => new Uint8Array(await fs.readFile(path)),
     readTextFile: async (path: string) => {
       readState.active += 1;
@@ -64,8 +66,17 @@ describe("DesktopVault startup loading", () => {
 
     readState.active = 0;
     readState.maxActive = 0;
+    readState.dirs = 0;
     const vault = new DesktopVault(root);
-    const files = await vault.loadAll();
+    const priorityLoaded: string[] = [];
+    const [files, dirs] = await Promise.all([
+      vault.loadAll({
+        priorityPaths: ["Notes/Two.md"],
+        onPriorityLoaded: (loaded) =>
+          priorityLoaded.push(...loaded.map((file) => file.path)),
+      }),
+      vault.listDirs(),
+    ]);
 
     expect(files.map((file) => file.path)).toEqual([
       ".trash/Notes/Deleted.md",
@@ -74,10 +85,12 @@ describe("DesktopVault startup loading", () => {
       "Projects/Active/Three.md",
     ]);
     expect(readState.maxActive).toBeGreaterThan(1);
-    await expect(vault.listDirs()).resolves.toEqual([
+    expect(priorityLoaded).toEqual(["Notes/Two.md"]);
+    expect(dirs).toEqual([
       "Notes",
       "Projects",
       "Projects/Active",
     ]);
+    expect(readState.dirs).toBe(6);
   });
 });

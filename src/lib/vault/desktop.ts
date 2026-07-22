@@ -16,6 +16,16 @@ import type { VaultBackend, VaultFile } from "./backend";
 
 const STARTUP_READ_CONCURRENCY = 32;
 
+interface VaultDiscovery {
+  notePaths: string[];
+  typeDirs: string[];
+}
+
+interface DesktopLoadOptions {
+  priorityPaths?: string[];
+  onPriorityLoaded?: (files: VaultFile[]) => void;
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -43,6 +53,7 @@ async function mapWithConcurrency<T, R>(
 /** Reads/writes notes as real .md files inside a user-chosen folder. */
 export class DesktopVault implements VaultBackend {
   readonly kind = "desktop" as const;
+  private discoveryInFlight: Promise<VaultDiscovery> | null = null;
 
   constructor(private readonly root: string) {}
 
@@ -65,8 +76,10 @@ export class DesktopVault implements VaultBackend {
     return this.abs(path);
   }
 
-  async loadAll(): Promise<VaultFile[]> {
-    const paths: string[] = [];
+  private discover(): Promise<VaultDiscovery> {
+    if (this.discoveryInFlight) return this.discoveryInFlight;
+    const notePaths: string[] = [];
+    const typeDirs: string[] = [];
 
     const walk = async (relDir: string, depth: number): Promise<void> => {
       const absDir = relDir ? this.abs(relDir) : this.root;
@@ -77,30 +90,78 @@ export class DesktopVault implements VaultBackend {
           if (entry.isDirectory) {
             const isTrashRoot = relPath === TRASH_DIR;
             if (entry.name.startsWith(".") && !isTrashRoot) return;
+            if (!relPath.startsWith(`${TRASH_DIR}/`) && !isTrashRoot) {
+              const typeDepth = relPath.split("/").length;
+              if (typeDepth <= MAX_TYPE_DEPTH) typeDirs.push(relPath);
+            }
             // one extra level inside .trash mirrors the type depth
             const maxDepth = MAX_TYPE_DEPTH + 1;
             if (depth < maxDepth) await walk(relPath, depth + 1);
             return;
           }
-          if (entry.isFile && /\.md$/i.test(entry.name)) paths.push(relPath);
+          if (entry.isFile && /\.md$/i.test(entry.name)) notePaths.push(relPath);
         }),
       );
     };
 
-    await walk("", 0);
-    paths.sort((left, right) => left.localeCompare(right));
+    const discovery = walk("", 0).then(() => ({
+      notePaths: notePaths.sort((left, right) => left.localeCompare(right)),
+      typeDirs: typeDirs.sort((left, right) => left.localeCompare(right)),
+    }));
+    this.discoveryInFlight = discovery;
+    const clearDiscovery = () => {
+      if (this.discoveryInFlight === discovery) this.discoveryInFlight = null;
+    };
+    void discovery.then(clearDiscovery, clearDiscovery);
+    return discovery;
+  }
+
+  async loadFile(path: string): Promise<VaultFile> {
+    const absPath = this.abs(path);
+    const [content, info] = await Promise.all([
+      readTextFile(absPath),
+      stat(absPath),
+    ]);
+    return {
+      path,
+      content,
+      updatedAt: (info.mtime ?? new Date()).toISOString(),
+    };
+  }
+
+  private loadFiles(
+    paths: string[],
+    onFileLoaded?: (file: VaultFile) => void,
+  ): Promise<VaultFile[]> {
     return mapWithConcurrency(paths, STARTUP_READ_CONCURRENCY, async (path) => {
-      const absPath = this.abs(path);
-      const [content, info] = await Promise.all([
-        readTextFile(absPath),
-        stat(absPath),
-      ]);
-      return {
-        path,
-        content,
-        updatedAt: (info.mtime ?? new Date()).toISOString(),
-      };
+      const file = await this.loadFile(path);
+      onFileLoaded?.(file);
+      return file;
     });
+  }
+
+  async loadAll(options: DesktopLoadOptions = {}): Promise<VaultFile[]> {
+    const { notePaths } = await this.discover();
+    const available = new Set(notePaths);
+    const requestedPriority = (options.priorityPaths ?? []).filter((path) =>
+      available.has(path),
+    );
+    const priorityPaths = requestedPriority.length
+      ? [...new Set(requestedPriority)].slice(0, STARTUP_READ_CONCURRENCY)
+      : notePaths
+          .filter((path) => !path.startsWith(`${TRASH_DIR}/`))
+          .slice(0, STARTUP_READ_CONCURRENCY);
+    const prioritySet = new Set(priorityPaths);
+    const priorityFiles = await this.loadFiles(priorityPaths, (file) =>
+      options.onPriorityLoaded?.([file]),
+    );
+    const remainingFiles = await this.loadFiles(
+      notePaths.filter((path) => !prioritySet.has(path)),
+    );
+    const filesByPath = new Map(
+      [...priorityFiles, ...remainingFiles].map((file) => [file.path, file]),
+    );
+    return notePaths.map((path) => filesByPath.get(path)!);
   }
 
   private async ensureParentDir(relPath: string): Promise<void> {
@@ -158,20 +219,7 @@ export class DesktopVault implements VaultBackend {
   }
 
   async listDirs(): Promise<string[]> {
-    const dirs: string[] = [];
-    const walk = async (relDir: string, depth: number): Promise<void> => {
-      const entries = await readDir(relDir ? this.abs(relDir) : this.root);
-      await Promise.all(
-        entries.map(async (entry) => {
-          if (!entry.isDirectory || entry.name.startsWith(".")) return;
-          const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
-          dirs.push(relPath);
-          if (depth + 1 < MAX_TYPE_DEPTH) await walk(relPath, depth + 1);
-        }),
-      );
-    };
-    await walk("", 0);
-    return dirs.sort((left, right) => left.localeCompare(right));
+    return (await this.discover()).typeDirs;
   }
 
   async writeBinary(path: string, bytes: Uint8Array): Promise<void> {

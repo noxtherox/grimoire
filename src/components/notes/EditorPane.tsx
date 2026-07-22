@@ -8,6 +8,7 @@ import {
   FolderSearch,
   Link2,
   Link2Off,
+  Loader2,
   MapPin,
   Maximize,
   Minimize,
@@ -103,6 +104,8 @@ interface EditorPaneProps {
   onOpenNote: (id: string) => void;
   onMoveExternalToVault: (id: string, typePath: string[]) => void;
   isBusy: boolean;
+  isLoading: boolean;
+  isRefreshing: boolean;
   isFocusMode: boolean;
   onToggleFocusMode: () => void;
   isDesktop: boolean;
@@ -123,6 +126,8 @@ export function EditorPane({
   onOpenNote,
   onMoveExternalToVault,
   isBusy,
+  isLoading,
+  isRefreshing,
   isFocusMode,
   onToggleFocusMode,
   isDesktop,
@@ -182,6 +187,17 @@ export function EditorPane({
     );
   }
 
+  if (isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center bg-grim-editor">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading note…
+        </div>
+      </div>
+    );
+  }
+
   const external = isExternalNote(note);
   const absolutePath = noteAbsolutePath(note, vaultLocation);
   const backlinkCount = external
@@ -192,6 +208,7 @@ export function EditorPane({
       );
 
   const handleFollowLink = async (title: string) => {
+    if (isRefreshing) return;
     // Read the freshest notes — the store may be ahead of this render
     const existing = findNoteByTitle(title, getNotes());
     if (existing) {
@@ -272,7 +289,12 @@ export function EditorPane({
 
   return (
     <div className="flex h-full flex-col bg-grim-editor">
-      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
+      <div
+        className={cn(
+          "flex items-center gap-2 border-b border-border/60 px-4 py-2",
+          isRefreshing && "pointer-events-none opacity-70",
+        )}
+      >
         {external ? (
           <>
             <TypePicker

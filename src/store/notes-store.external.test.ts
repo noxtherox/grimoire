@@ -110,6 +110,7 @@ import {
   moveExternalNoteToVault,
   openDocumentPathsFromFinder,
   openExternalNotes,
+  prioritizeNoteLoad,
   revealNoteInDesktop,
   resolveNoteConflict,
   restoreNote,
@@ -147,6 +148,7 @@ describe("external note store workflow", () => {
   let firstPath: string;
   let secondPath: string;
   let missingPath: string;
+  let startupSnapshotContent: string;
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "grimoire-external-test-"));
@@ -162,10 +164,42 @@ describe("external note store workflow", () => {
     ]);
     await Promise.all([
       writeFile(join(vault, "inbox", "Welcome.md"), "# Welcome\n", "utf8"),
+      writeFile(join(vault, "inbox", "Later.md"), "# Later\n", "utf8"),
       writeFile(firstPath, "# First external\n", "utf8"),
       writeFile(secondPath, "# Second external\n", "utf8"),
     ]);
     storage.set("grimoire.vaultPath", vault);
+    storage.set(
+      `grimoire.startupCache.v1.${vault}`,
+      JSON.stringify({
+        version: 1,
+        location: vault,
+        notes: [
+          {
+            id: "cached-welcome",
+            path: "inbox/Welcome.md",
+            title: "Welcome from cache",
+            snippet: "Available before the disk read finishes.",
+            pinned: false,
+            archived: false,
+            updatedAt: new Date(0).toISOString(),
+          },
+          {
+            id: "cached-later",
+            path: "inbox/Later.md",
+            title: "Later from cache",
+            snippet: "Still waiting for its disk read.",
+            pinned: false,
+            archived: false,
+            updatedAt: new Date(0).toISOString(),
+          },
+        ],
+        extraTypes: [["inbox"]],
+        schemas: {},
+        typeIcons: {},
+        fileLocations: [],
+      }),
+    );
     storage.set(
       "grimoire.externalPaths",
       JSON.stringify([missingPath, join(vault, "inbox", "Welcome.md")]),
@@ -193,14 +227,53 @@ describe("external note store workflow", () => {
         }
       },
     );
+    let releaseStartupRead!: () => void;
+    mocks.readTextGatePath = join(vault, "inbox", "Later.md");
+    mocks.readTextGate = new Promise<void>((resolve) => {
+      releaseStartupRead = resolve;
+    });
     initStore();
     await waitFor(() =>
-      getNotes().some((note) => note.path === "inbox/Welcome.md"),
+      getNotes().some((note) => note.id === "cached-later"),
+    );
+    startupSnapshotContent = getNotes().find(
+      (note) => note.id === "cached-later",
+    )!.content;
+    await waitFor(() => mocks.readTextGatePath === null);
+    await prioritizeNoteLoad("cached-later");
+    expect(
+      getNotes().find((note) => note.id === "cached-later")?.content,
+    ).toBe("# Later\n");
+    await waitFor(() =>
+      getNotes().some(
+        (note) => note.id === "cached-welcome" && note.content === "# Welcome\n",
+      ),
+    );
+    updateNoteBody(
+      "cached-welcome",
+      "# Welcome\n\nEdited safely while other notes were loading.\n",
+    );
+    releaseStartupRead();
+    await waitFor(() =>
+      getNotes().some(
+        (note) =>
+          note.path === "inbox/Later.md" && note.content === "# Later\n",
+      ),
+    );
+    await waitFor(async () =>
+      (await readFile(join(vault, "inbox", "Welcome.md"), "utf8")).includes(
+        "Edited safely while other notes were loading.",
+      ),
     );
   });
 
   afterAll(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("shows the cached note index before the first disk read finishes", () => {
+    expect(startupSnapshotContent).toContain("Later from cache");
+    expect(startupSnapshotContent).toContain("Still waiting for its disk read.");
   });
 
   it("opens, edits, reveals, closes, and moves files from different folders", async () => {
